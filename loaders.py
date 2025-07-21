@@ -29,8 +29,15 @@ class Loader:
         
         for i in range(len(documents)):
             documents[i].page_content = documents[i].page_content.replace("\n\n", " ").replace("\n", " ")
+        
+        text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=500,
+        chunk_overlap=100,
+    )
+        
+        splitted_docs = text_splitter.split_documents(documents)
+        return splitted_docs
             
-        return documents
 
 
 
@@ -78,7 +85,7 @@ class Splitter:
     
     
 if __name__ == "__main__":
-    pdf_path = "./data/sample.pdf"
+    pdf_path = "./data/dummy_long_file.pdf"
     l1 = Loader()
     pdf = l1.load_pdf(pdf_path)
     
@@ -94,9 +101,9 @@ if __name__ == "__main__":
 #--------------------------------------------------
 
     csv_path = "./data/sample.csv"
-    csv = l1.load_csv(csv_path)
+    #csv = l1.load_csv(csv_path)
     
-    print(csv)
+    #print(csv)
     
     print()
     print("="*150)
@@ -108,8 +115,8 @@ if __name__ == "__main__":
 #--------------------------------------------------
 
     html_path = "./data/sample.html"
-    html = l1.load_html(html_path)
-    print(html)
+    #html = l1.load_html(html_path)
+    #print(html)
     
     print()
     print("="*150)
@@ -126,13 +133,17 @@ loader = OracleSQLLoader(
     metadata_columns=["ID", "TITLE"]
 )
 
-data = loader.load()
-print(data)
+#data = loader.load()
+#print(data)
+
+print()
+print("="*150)
+print()
 
 #--------------------------------------------------
 
-s1 = Splitter()
-splitted_html = s1.split(html)
-print(splitted_html)
-    
 
+    
+#--------------------------------------------------
+#cats = l1.load_pdf("./data/data.txt")
+#print(cats)
