@@ -3,6 +3,7 @@ from unstructured.cleaners.core import clean_extra_whitespace
 from langchain_community.document_loaders.csv_loader import UnstructuredCSVLoader
 from langchain_community.document_loaders import UnstructuredHTMLLoader
 from langchain_core.documents import Document
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 import oracledb
 
 
@@ -32,12 +33,6 @@ class Loader:
         return documents
 
 
-from langchain_core.documents import Document
-from langchain_community.document_loaders import OracleDocLoader
-
-from langchain_core.documents import Document
-from langchain_community.document_loaders import OracleDocLoader
-import oracledb
 
 class OracleSQLLoader:
     def __init__(self, user, password, dsn, query, content_column, metadata_columns=[]):
@@ -59,6 +54,21 @@ class OracleSQLLoader:
             results.append(Document(page_content=str(content), metadata=metadata))
 
         return results
+    
+class Splitter:
+    def __init__(self) -> None:
+        pass
+    
+    def split(self, documents):
+        text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=500,
+        chunk_overlap=100,
+    )
+
+        splitted_docs = text_splitter.split_documents(documents)
+        return splitted_docs
+
+
 
 
 
@@ -118,5 +128,11 @@ loader = OracleSQLLoader(
 
 data = loader.load()
 print(data)
+
+#--------------------------------------------------
+
+s1 = Splitter()
+splitted_html = s1.split(html)
+print(splitted_html)
     
 
