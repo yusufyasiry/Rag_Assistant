@@ -1,6 +1,6 @@
 from loaders import Loader
-from typing import List
 from langchain_core.documents import Document
+from embedder import Embedder
 import os
 
 
@@ -41,5 +41,6 @@ class Ingestor:
     
 if __name__ == "__main__":
     i1 = Ingestor("./data")
-    docs = i1.ingest_all()
-    print(docs)
+    e1 = Embedder()
+    #docs = i1.ingest_all()
+    print(e1.embed("Hello There"))
