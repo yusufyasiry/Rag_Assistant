@@ -1,0 +1,67 @@
+# === Python ===
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# Byte-compiled / optimized / DLL files
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+parts/
+*.manifest
+*.spec
+
+# === Virtual Environment ===
+.venv/
+env/
+venv/
+ENV/
+*.env
+*.venv
+
+# === Pipenv / Poetry ===
+Pipfile.lock
+poetry.lock
+
+# === Jupyter Notebooks Checkpoints ===
+.ipynb_checkpoints/
+
+# === VSCode ===
+.vscode/
+
+# === macOS ===
+.DS_Store
+
+# === Test / Coverage ===
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+*.py,cover
+.cache
+.pytest_cache/
+
+# === Logs ===
+*.log
+
+# === dotenv / config ===
+.env
+.env.*
+
+# === MongoDB dump or data files (if any) ===
+*.bson
+*.json
+
+# === Custom data or output ===
+data/
+output/
+*.db
+*.sqlite3
+
+# === LangChain ===
+langchain*.cache/
