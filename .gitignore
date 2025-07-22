@@ -58,10 +58,13 @@ coverage.xml
 *.json
 
 # === Custom data or output ===
-data/
 output/
 *.db
 *.sqlite3
 
 # === LangChain ===
 langchain*.cache/
+
+
+todo.txt
+.env

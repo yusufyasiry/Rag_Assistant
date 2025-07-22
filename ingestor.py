@@ -39,8 +39,8 @@ class Ingestor:
         return documents
     
     
-if __name__ == "__main__":
-    i1 = Ingestor("./data")
-    e1 = Embedder()
+#if __name__ == "__main__":
+    #i1 = Ingestor("./data")
+    #e1 = Embedder()
     #docs = i1.ingest_all()
-    print(e1.embed("Hello There"))
+    #print(e1.embed("Hello There"))

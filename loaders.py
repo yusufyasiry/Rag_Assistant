@@ -84,61 +84,61 @@ class Splitter:
     
     
     
-if __name__ == "__main__":
-    pdf_path = "./data/dummy_long_file.pdf"
-    l1 = Loader()
-    pdf = l1.load_pdf(pdf_path)
+#if __name__ == "__main__":
+    #pdf_path = "./data/dummy_long_file.pdf"
+    #l1 = Loader()
+    #pdf = l1.load_pdf(pdf_path)
     
-    print(pdf)
+    #print(pdf)
     
-    print()
-    print("="*150)
-    print()
+    #print()
+    #print("="*150)
+    #print()
 
     # for i in range(len(pdf)):
     #     print(pdf[i].page_content)
     
 #--------------------------------------------------
 
-    csv_path = "./data/sample.csv"
+    #csv_path = "./data/sample.csv"
     #csv = l1.load_csv(csv_path)
     
     #print(csv)
     
-    print()
-    print("="*150)
-    print()
+    #print()
+    #print("="*150)
+    #print()
     
     # for i in range(len(csv)):
     #    print(csv[i].page_content)
         
 #--------------------------------------------------
 
-    html_path = "./data/sample.html"
+    #html_path = "./data/sample.html"
     #html = l1.load_html(html_path)
     #print(html)
     
-    print()
-    print("="*150)
-    print()
+    #print()
+    #print("="*150)
+    #print()
     
 #--------------------------------------------------
 
-loader = OracleSQLLoader(
-    user="dummy_user",
-    password="123456",
-    dsn="localhost:1521/xepdb1",
-    query="SELECT * FROM rag_documents",
-    content_column="CONTENT",
-    metadata_columns=["ID", "TITLE"]
-)
+#loader = OracleSQLLoader(
+    #user="dummy_user",
+    #password="123456",
+    #dsn="localhost:1521/xepdb1",
+    #query="SELECT * FROM rag_documents",
+    #content_column="CONTENT",
+    #metadata_columns=["ID", "TITLE"]
+#)
 
 #data = loader.load()
 #print(data)
 
-print()
-print("="*150)
-print()
+#print()
+#print("="*150)
+#print()
 
 #--------------------------------------------------
 
