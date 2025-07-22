@@ -14,24 +14,24 @@ collection = db["embeddings"]
 
 embedder = Embedder()
 user_query = input("How can I help you ? \n")
-query_embedding  = embedder.embed(user_query)[0]
+query_embedding  = embedder.embed([user_query])[0]
 
 
-results = collection.aggregate([
+results = list(collection.aggregate([
     {
         "$vectorSearch": {
-            "queryVector":query_embedding,
+            "queryVector": query_embedding,
             "path": "embedding",
             "numCandidates": 100,
             "limit": 10,
-            "index": "vector_index"
+            "index": "vector_index"  
         }
     }
-])
+]))
+
 
 relevant_chunks = [doc["content"] for doc in results]
 context = "\n\n".join(relevant_chunks)
-
 
 
 dotenv.load_dotenv()
@@ -65,6 +65,9 @@ response = openai.chat.completions.create(
     temperature= 0.3
 )
 answer = response.choices[0].message.content
-print(answer, relevant_chunks)
- 
+print(answer)
+print(relevant_chunks)
+
+
+
 

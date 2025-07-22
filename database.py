@@ -23,6 +23,8 @@ for doc, emb in zip(docs, embeddings):
         "metadata": doc.metadata  
     }
     collection.insert_one(record)
+
+print("Insertion Completed")
     
 
 

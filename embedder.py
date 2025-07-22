@@ -14,3 +14,13 @@ class Embedder:
     def embed(self, chunks):
         embeddings = self.model.embed_documents(chunks)
         return embeddings
+    
+    
+    
+    
+    
+    
+    
+    
+    
+

@@ -21,10 +21,12 @@ class Ingestor:
             ext = os.path.splitext(filename)[-1].lower()
 
             try:
-                if ext in [".pdf", ".txt"]:
+                if ext == ".pdf":
                     docs = self.loader.load_pdf(file_path)
                 elif ext == ".csv":
                     docs = self.loader.load_csv(file_path)
+                elif ext == ".txt":
+                    docs = self.loader.load_txt(file_path)
                 elif ext in [".html", ".htm"]:
                     docs = self.loader.load_html(file_path)
                 else:
@@ -44,3 +46,9 @@ class Ingestor:
     #e1 = Embedder()
     #docs = i1.ingest_all()
     #print(e1.embed("Hello There"))
+    
+    
+    
+    
+    
+    
