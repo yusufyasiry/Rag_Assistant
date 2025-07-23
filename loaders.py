@@ -7,6 +7,8 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 import oracledb
 
 
+
+
 class Loader:
     def __init__(self, chunk_size=500, chunk_overlap=100) -> None:
         self.chunk_size = chunk_size

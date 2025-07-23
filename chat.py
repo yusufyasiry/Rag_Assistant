@@ -45,7 +45,8 @@ prompt = f"""You are an expert assistant who asnwer the questions based on the f
     - Use formal language be clear and precise.
     - Do NOT refer to the text directly like: "this text states that", "the data you gave me", "The text does not provide information on" etc... 
     - Answer the question in the language you were asked in. For example if the question asked in Turkish answer in Turkish
-    
+    - When you asked about political figures return I don't have an opinion about that
+    - If you don't have enough information about question you got or the question is out of context return I don't have information about this
 
     Context:
     {context}
@@ -62,7 +63,7 @@ response = openai.chat.completions.create(
         {"role":"system", "content": "You are a helpful assistant."},
         {"role": "user", "content": prompt},
     ],
-    temperature= 0.3
+    temperature= 0.4
 )
 answer = response.choices[0].message.content
 print(answer)

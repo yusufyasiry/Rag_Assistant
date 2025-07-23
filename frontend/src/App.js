@@ -1,16 +1,21 @@
 import React, { useState, useRef } from 'react';
 import { Search, Upload, File, CheckCircle, Clock, AlertCircle, X, FileText, Database, Globe, BarChart3 } from 'lucide-react';
+import axios from 'axios';
 import './App.css';
 
 const DocumentAssistant = () => {
   const [documents, setDocuments] = useState([
     { id: 1, name: 'company_policy.pdf', status: 'processed', size: '2.4 MB', type: 'pdf' },
-    { id: 2, name: 'sales_data.csv', status: 'processing', size: '1.2 MB', type: 'csv' },
+    { id: 2, name: 'sales_data.csv', status: 'processed', size: '1.2 MB', type: 'csv' },
   ]);
   const [query, setQuery] = useState('');
   const [searchResult, setSearchResult] = useState(null);
   const [isSearching, setIsSearching] = useState(false);
+  const [error, setError] = useState(null);
   const fileInputRef = useRef(null);
+
+  // API base URL
+  const API_BASE_URL = 'http://127.0.0.1:8000';
 
   const getFileIcon = (type) => {
     const icons = {
@@ -57,23 +62,38 @@ const DocumentAssistant = () => {
     });
   };
 
-  const handleSearch = () => {
+  const handleSearch = async () => {
     if (!query.trim()) return;
     
     setIsSearching(true);
+    setError(null);
     
-    // Simulate API call
-    setTimeout(() => {
-      setSearchResult({
-        answer: "Based on your uploaded documents, here's what I found regarding your query. The company policy document outlines several key procedures that are relevant to your question. Additionally, the sales data shows trending patterns that support this information.",
-        sources: [
-          { name: 'company_policy.pdf', relevance: 0.95, snippet: 'The policy clearly states that all employees must...' },
-          { name: 'sales_data.csv', relevance: 0.78, snippet: 'Sales figures indicate a 15% increase in Q3...' }
-        ],
-        confidence: 0.89
+    try {
+      // Make API call to your backend
+      const response = await axios.post(`${API_BASE_URL}/get_question`, {
+        question: query
       });
+      
+      // Transform the API response to match your frontend format
+      const apiResult = response.data;
+      
+      setSearchResult({
+        answer: apiResult.answer,
+        sources: apiResult.chunks.map((chunk, index) => ({
+          name: `Document ${index + 1}`,
+          relevance: 0.95 - (index * 0.1),
+          snippet: chunk.length > 150 ? chunk.substring(0, 150) + "..." : chunk
+        })),
+        confidence: apiResult.chunks.length > 0 ? 0.89 : 0.0
+      });
+      
+    } catch (error) {
+      console.error('Search error:', error);
+      setError('Failed to search. Please make sure your backend is running.');
+      setSearchResult(null);
+    } finally {
       setIsSearching(false);
-    }, 1500);
+    }
   };
 
   const removeDocument = (id) => {
@@ -142,6 +162,15 @@ const DocumentAssistant = () => {
             </div>
 
             {/* Search Results */}
+            {error && (
+              <div className="card">
+                <div className="error-message">
+                  <AlertCircle size={20} color="#ef4444" />
+                  <span>{error}</span>
+                </div>
+              </div>
+            )}
+
             {searchResult && (
               <div className="card">
                 <div className="result-header">

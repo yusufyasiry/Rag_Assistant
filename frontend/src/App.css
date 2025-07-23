@@ -396,3 +396,14 @@
     font-size: 16px;
   }
 }
+
+.error-message {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: #ef4444;
+  background: #fee2e2;
+  padding: 16px;
+  border-radius: 8px;
+  border: 1px solid #fecaca;
+}
