@@ -11,6 +11,8 @@ from prompts import Prompts
 from fastapi.responses import JSONResponse
 from typing import List
 from loaders import Loader
+from ingestor import Ingestor
+import shutil
 
 
 
@@ -98,26 +100,27 @@ def get_question(request:Question):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"OpenAI Chat Error: {e}")
  
+ 
+UPLOAD_DIR = "./data"
 @app.post("/upload_file")   
-async def upload_files(files: List[UploadFile] = File(None)):
-    loader = Loader()
-    if not files:
-        return JSONResponse(status_code=400, content={"error": "No files uploaded"})
+async def upload_files(files: List[UploadFile] = File(...)):
+    saved_files = []
     
     for file in files:
-        file_name = file.filename
-        ext = str(file_name).split(".")[1]
         
-        #if ext in ["pdf", "txt"]:
-            #docs = loader.load_pdf(file)
-        #elif ext == "csv":
-            #docs = loader.load_csv(file)
-        #elif ext in ["html", "htm"]:
-            #docs = loader.load_html(file)
+        if not file.filename or not isinstance(file.filename, str):
+            return {"error": f"Invalid filename for file: {file}"}
         
+        file_path = os.path.join(UPLOAD_DIR, file.filename)
+        with open (file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+        saved_files.append(file.filename)
         
-        
-    return JSONResponse(content={"files": file_name})
+    ingestor = Ingestor(UPLOAD_DIR)
+    documents = ingestor.ingest_all()
+    
+    
+    return {"message": "Files upladed succesfully", "files":saved_files, "documents":documents}
 
 
 #@app.post("/upload_documents"):

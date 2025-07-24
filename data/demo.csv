@@ -1,0 +1,11 @@
+id,title,description,category,author,date_created
+1,Introduction to Machine Learning,"Learn the fundamentals of machine learning algorithms and their applications in real-world scenarios.",Education,Dr. Smith,2024-01-15
+2,Python Programming Basics,"A comprehensive guide to Python programming language covering syntax, data structures, and best practices.",Programming,John Doe,2024-01-20
+3,Data Analysis with Pandas,"Master data manipulation and analysis using the powerful Pandas library for Python.",Data Science,Jane Wilson,2024-01-25
+4,Web Development with React,"Build modern web applications using React framework and JavaScript ES6 features.",Web Development,Mike Johnson,2024-02-01
+5,Database Design Principles,"Learn essential database design concepts including normalization, relationships, and optimization.",Database,Sarah Brown,2024-02-05
+6,DevOps Best Practices,"Explore continuous integration, deployment strategies, and infrastructure as code methodologies.",DevOps,Alex Chen,2024-02-10
+7,Cybersecurity Fundamentals,"Understand basic security concepts, threat modeling, and protection strategies for digital assets.",Security,Emily Davis,2024-02-15
+8,Cloud Computing with AWS,"Get started with Amazon Web Services and learn to deploy scalable applications in the cloud.",Cloud Computing,David Lee,2024-02-20
+9,Mobile App Development,"Create cross-platform mobile applications using modern frameworks and development tools.",Mobile Development,Lisa Wang,2024-02-25
+10,Artificial Intelligence Ethics,"Explore the ethical implications of AI systems and responsible development practices.",AI Ethics,Prof. Garcia,2024-03-01 
