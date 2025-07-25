@@ -7,25 +7,24 @@ uri = "mongodb+srv://admin:123456!@cluster0.fwq8r3i.mongodb.net/?retryWrites=tru
 client = MongoClient(uri)
 db = client["support_assistant"]
 collection = db["embeddings"]
+messages = db["messages"]
+conversations = db["conversations"]
 
 
+#loader = Loader()
+#docs = loader.load_pdf("./data/data.txt")
+#texts = [doc.page_content for doc in docs]
+#embedder = Embedder()
+#embeddings = embedder.embed(texts)
 
-loader = Loader()
-docs = loader.load_pdf("./data/data.txt")
-texts = [doc.page_content for doc in docs]
-embedder = Embedder()
-embeddings = embedder.embed(texts)
+#for doc, emb in zip(docs, embeddings):
+    #record = {
+        #"content": doc.page_content,
+        #"embedding": emb,
+        #"metadata": doc.metadata  
+    #}
+    #collection.insert_one(record)
 
-for doc, emb in zip(docs, embeddings):
-    record = {
-        "content": doc.page_content,
-        "embedding": emb,
-        "metadata": doc.metadata  
-    }
-    collection.insert_one(record)
-
-print("Insertion Completed")
+#print("Insertion Completed")
     
-
-
 

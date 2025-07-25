@@ -1,183 +1,40 @@
 from pymongo.mongo_client import MongoClient
-from openai import OpenAI
 from embedder import Embedder
 import os
 import dotenv
 import openai
 from pydantic import BaseModel
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from prompts import Prompts
-from fastapi.responses import JSONResponse
-from typing import List
-from loaders import Loader
-from ingestor import Ingestor
-import shutil
-import hashlib
-import requests
-import json
-from requests.auth import HTTPDigestAuth
+from datetime import datetime, timezone
+import uuid
+from motor.motor_asyncio import AsyncIOMotorClient
+from typing import Dict, Any, Optional, Union
+
 
 class Question(BaseModel):
-    question:str
+    question: str
+    conversation_id: Optional[str] = None
+    
+class ConversationCreate(BaseModel):
+    title:str
+    user_id:str
 
-def generate_file_hash(file_content: bytes) -> str:
-    """Generate MD5 hash for file content to detect duplicates"""
-    return hashlib.md5(file_content).hexdigest()
+class ConversationUpdate(BaseModel):
+    title: Optional[str] = None
+    status: Optional[str] = None
+    
+class MessageCreate(BaseModel):
+    conversation_id: str
+    question: str
 
-# Atlas Admin API Functions
-def create_atlas_search_index():
-    """
-    Create search index using Atlas Admin API
-    You need to set these environment variables in your .env file:
-    - ATLAS_PUBLIC_KEY: Your Atlas API public key
-    - ATLAS_PRIVATE_KEY: Your Atlas API private key  
-    - ATLAS_PROJECT_ID: Your Atlas project ID
-    - ATLAS_CLUSTER_NAME: Your cluster name (e.g., "Cluster0")
-    """
-    
-    # Atlas API credentials from environment variables
-    public_key = os.getenv("ATLAS_PUBLIC_KEY")
-    private_key = os.getenv("ATLAS_PRIVATE_KEY")
-    project_id = os.getenv("ATLAS_PROJECT_ID")
-    cluster_name = os.getenv("ATLAS_CLUSTER_NAME")
-    
-    if not all([public_key, private_key, project_id, cluster_name]):
-        print("⚠️  Missing Atlas API credentials. Please add to your .env file:")
-        print("ATLAS_PUBLIC_KEY=your_public_key")
-        print("ATLAS_PRIVATE_KEY=your_private_key")
-        print("ATLAS_PROJECT_ID=your_project_id")
-        print("ATLAS_CLUSTER_NAME=your_cluster_name")
-        return False
-    
-    # Ensure we have string values (not None)
-    public_key = str(public_key)
-    private_key = str(private_key)
-    project_id = str(project_id)
-    cluster_name = str(cluster_name)
-    
-    # Atlas Admin API URL
-    url = f"https://cloud.mongodb.com/api/atlas/v1.0/groups/{project_id}/clusters/{cluster_name}/fts/indexes"
-    
-    # Index definition
-    index_definition = {
-        "name": "vector_index",
-        "database": "test-db",
-        "collectionName": "embeddings",
-        "type": "vectorSearch",
-        "definition": {
-            "fields": [
-                {
-                    "type": "vector",
-                    "path": "embedding",
-                    "numDimensions": 1536,
-                    "similarity": "cosine"
-                }
-            ]
-        }
-    }
-    
-    try:
-        print("🔄 Creating search index via Atlas Admin API...")
-        
-        # Make API request
-        response = requests.post(
-            url,
-            auth=HTTPDigestAuth(public_key, private_key),
-            headers={"Content-Type": "application/json"},
-            data=json.dumps(index_definition),
-            timeout=30
-        )
-        
-        if response.status_code == 201:
-            print("✅ Search index created successfully!")
-            return True
-        elif response.status_code == 409:
-            print("ℹ️  Search index already exists")
-            return True
-        else:
-            print(f"❌ Failed to create index. Status: {response.status_code}")
-            print(f"Response: {response.text}")
-            return False
-            
-    except requests.exceptions.Timeout:
-        print("⏰ Request timed out. Index creation may still be in progress.")
-        return False
-    except Exception as e:
-        print(f"❌ Error creating search index: {e}")
-        return False
-
-def check_atlas_search_index():
-    """Check if the search index exists using Atlas Admin API"""
-    
-    public_key = os.getenv("ATLAS_PUBLIC_KEY")
-    private_key = os.getenv("ATLAS_PRIVATE_KEY")
-    project_id = os.getenv("ATLAS_PROJECT_ID")
-    cluster_name = os.getenv("ATLAS_CLUSTER_NAME")
-    
-    if not all([public_key, private_key, project_id, cluster_name]):
-        return {"error": "Missing Atlas API credentials"}
-    
-    # Ensure we have string values (not None)
-    public_key = str(public_key)
-    private_key = str(private_key)
-    project_id = str(project_id)
-    cluster_name = str(cluster_name)
-    
-    url = f"https://cloud.mongodb.com/api/atlas/v1.0/groups/{project_id}/clusters/{cluster_name}/fts/indexes/test-db/embeddings"
-    
-    try:
-        response = requests.get(
-            url,
-            auth=HTTPDigestAuth(public_key, private_key),
-            timeout=10
-        )
-        
-        if response.status_code == 200:
-            indexes = response.json()
-            vector_indexes = [idx for idx in indexes if idx.get('name') == 'vector_index']
-            return {
-                "exists": len(vector_indexes) > 0,
-                "indexes": vector_indexes,
-                "status": vector_indexes[0].get('status') if vector_indexes else None
-            }
-        else:
-            return {"error": f"Failed to fetch indexes: {response.status_code}"}
-            
-    except Exception as e:
-        return {"error": str(e)}
-
-def check_search_index_works():
-    """Test if vector search actually works"""
-    try:
-        db_test = client["test-db"]
-        collection_test = db_test["embeddings"]
-        
-        # Try a simple vector search to test if index works
-        test_vector = [0.1] * 1536  # Simple test vector
-        
-        result = list(collection_test.aggregate([
-            {
-                "$vectorSearch": {
-                    "queryVector": test_vector,
-                    "path": "embedding",
-                    "numCandidates": 1,
-                    "limit": 1,
-                    "index": "vector_index"
-                }
-            }
-        ]))
-        
-        return True
-        
-    except Exception as e:
-        return False
-
-    
 #connecting db
-client = MongoClient("mongodb+srv://admin:123456!@cluster0.fwq8r3i.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")
+client = AsyncIOMotorClient("mongodb+srv://admin:123456!@cluster0.fwq8r3i.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")
 db = client["support_assistant"]
 collection = db["embeddings"]
+messages = db["messages"]
+conversations = db["conversations"]
 
 #getting open ai api 
 dotenv.load_dotenv()
@@ -197,16 +54,61 @@ app.add_middleware(
 def read_root():
     return{"This is":"root"}
 
-@app.post("/get_question")
-def get_question(request:Question): 
+@app.post("/chat/{conversation_id}")
+async def chat_with_conversation(conversation_id: str, request: MessageCreate):
+    """
+    Enhanced conversational RAG endpoint that:
+    1. Stores user message
+    2. Retrieves conversation history
+    3. Gets relevant documents
+    4. Generates response with context
+    5. Stores assistant response
+    """
     prompt = Prompts()
     embedder = Embedder()
     query = request.question
+    
+    # Verify conversation exists
+    conversation = await db.conversations.find_one({"conversation_id": conversation_id})
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    
+    # Step 1: Store user message
+    user_message = {
+        "message_id": str(uuid.uuid4()),
+        "conversation_id": conversation_id,
+        "role": "user",
+        "content": query,
+        "timestamp": datetime.now(timezone.utc),
+        "token_count": len(query.split()) * 1.3  # Rough estimate
+    }
+    
+    await db.messages.insert_one(user_message)
+    
+    # Step 2: Get conversation history (last 10 messages for context)
+    history_cursor = db.messages.find(
+        {"conversation_id": conversation_id}
+    ).sort("timestamp", -1).limit(100)
+    
+    history_messages = []
+    async for msg in history_cursor:
+        history_messages.append(msg)
+    
+    # Reverse to get chronological order
+    history_messages.reverse()
+    
+    # Build conversation context
+    conversation_context = ""
+    for msg in history_messages[:-1]:  # Exclude the just-added user message
+        role = "Human" if msg["role"] == "user" else "Assistant"
+        conversation_context += f"{role}: {msg['content']}\n"
+    
+    # Step 3: Get relevant documents 
     multi_query = prompt.generate_multi_query(query)
     embedded_query = embedder.embed(multi_query)[0]
     
     try:
-        results = list(collection.aggregate([
+        results = await collection.aggregate([
             {
                 "$vectorSearch": {
                     "queryVector": embedded_query,
@@ -216,7 +118,116 @@ def get_question(request:Question):
                     "index": "vector_index"  
                 }
             }
-        ]))
+        ]).to_list(length=None)
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Vector search failed. Please check if 'vector_index' exists in MongoDB Atlas. Error: {str(e)}"
+        )
+    
+    top_chunks = [r["content"] for r in results]
+    document_context = "\n\n".join(top_chunks)
+    
+    # Step 4: Build enhanced prompt with conversation history
+    enhanced_prompt = f"""You are an expert assistant who answers questions based on the following rules.
+        
+    Rules:
+    - Use formal language be clear and precise.
+    - DO NOT refer to the text directly like: "this text states that", "the data you gave me", "The text does not provide information on" etc... 
+    - Answer the question in the language you were asked in. For example if the question asked in Turkish answer in Turkish
+    - When you asked about political figures answer like I don't have an opinion about that but in the language that you were asked
+    - If you don't have enough information about question or the question is out of context return I don't have information about this
+    - Use the conversation history to understand context and provide more relevant answers
+    
+    Conversation History:
+    {conversation_context}
+    
+    Document Context:
+    {document_context}
+
+    Current Question: {query}
+
+    Answer:"""
+    
+    # Step 5: Generate AI response
+    try:
+        response = openai.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant with access to conversation history and documents."},
+                {"role": "user", "content": enhanced_prompt},
+            ],
+            temperature=0.5
+        )
+        answer = response.choices[0].message.content
+        
+        # Step 6: Store assistant response
+        assistant_message = {
+            "message_id": str(uuid.uuid4()),
+            "conversation_id": conversation_id,
+            "role": "assistant",
+            "content": answer,
+            "sources": top_chunks,  # Store the source chunks
+            "timestamp": datetime.now(timezone.utc),
+            "token_count": len((answer or "").split()) * 1.3
+        }
+        
+        await db.messages.insert_one(assistant_message)
+        
+        # Step 7: Update conversation metadata
+        await db.conversations.update_one(
+            {"conversation_id": conversation_id},
+            {
+                "$set": {"updated_at": datetime.now(timezone.utc)},
+                "$inc": {"message_count": 2}  # User + assistant message
+            }
+        )
+        
+        return {
+            "answer": answer, 
+            "chunks": top_chunks,
+            "conversation_id": conversation_id,
+            "message_count": len(history_messages) + 1  # +1 for new assistant message
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"OpenAI Chat Error: {e}")
+
+# Keep your original endpoint for backward compatibility but enhance it
+@app.post("/get_question")
+async def get_question(request: Question): 
+    """
+    Enhanced version that can work with or without conversation context
+    """
+    # If conversation_id is provided, use conversational approach
+    if request.conversation_id:
+        message_request = MessageCreate(
+            conversation_id=request.conversation_id,
+            question=request.question
+        )
+        return await chat_with_conversation(request.conversation_id, message_request)
+    
+    # Otherwise, use the original single-query approach
+    prompt = Prompts()
+    embedder = Embedder()
+    query = request.question
+    multi_query = prompt.generate_multi_query(query)
+    embedded_query = embedder.embed(multi_query)[0]
+    
+    try:
+        results = await collection.aggregate([
+            {
+                "$vectorSearch": {
+                    "queryVector": embedded_query,
+                    "path": "embedding",
+                    "numCandidates": 100,
+                    "limit": 10,
+                    "index": "vector_index"  
+                }
+            }
+        ]).to_list(length=None)
+        
     except Exception as e:
         raise HTTPException(
             status_code=503,
@@ -226,11 +237,11 @@ def get_question(request:Question):
     top_chunks = [r["content"] for r in results]
     context = "\n\n".join(top_chunks)
     
-    prompt = f"""You are an expert assistant who asnwer the questions based on the following rules. 
+    prompt_text = f"""You are an expert assistant who answer the questions based on the following rules. 
         
     Rules:
     - Use formal language be clear and precise.
-    - Do NOT refer to the text directly like: "this text states that", "the data you gave me", "The text does not provide information on" etc... 
+    - DO NOT refer to the text directly like: "this text states that", "the data you gave me", "The text does not provide information on" etc... 
     - Answer the question in the language you were asked in. For example if the question asked in Turkish answer in Turkish
     - When you asked about political figures return I don't have an opinion about that
     - If you don't have enough information about question or the question is out of context return I don't have information about this
@@ -245,14 +256,175 @@ def get_question(request:Question):
     
     try:
         response = openai.chat.completions.create(
-            model = "gpt-4o",
+            model="gpt-4o",
             messages=[
-                {"role":"system", "content": "You are a helpful assistant."},
-                {"role": "user", "content": prompt},
+                {"role": "system", "content": "You are a helpful assistant."},
+                {"role": "user", "content": prompt_text},
             ],
-            temperature= 0.4
+            temperature=0.5
         )
         answer = response.choices[0].message.content
-        return {"answer":answer, "chunks":top_chunks}
+        return {"answer": answer}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"OpenAI Chat Error: {e}")
+
+# Optional: Add a simpler chat endpoint that auto-creates conversation
+@app.post("/chat")
+async def quick_chat(request: Question):
+    """
+    Simplified chat endpoint that auto-creates conversation if needed
+    """
+    USER_ID = "default_user"  # In real app, get from auth
+    
+    # Create new conversation for this chat
+    new_conversation = {
+        "conversation_id": str(uuid.uuid4()),
+        "user_id": USER_ID,
+        "title": request.question[:50] + "..." if len(request.question) > 50 else request.question,
+        "created_at": datetime.now(timezone.utc),
+        "updated_at": datetime.now(timezone.utc),
+        "message_count": 0,
+        "status": "active"
+    }
+    
+    await db.conversations.insert_one(new_conversation)
+    
+    # Use the conversational endpoint
+    message_request = MessageCreate(
+        conversation_id=new_conversation["conversation_id"],
+        question=request.question
+    )
+    
+    result = await chat_with_conversation(new_conversation["conversation_id"], message_request)
+    result["conversation"] = new_conversation  # Include conversation info
+    
+    return result
+    
+@app.post("/conversations")
+async def create_conversation(conversation: ConversationCreate):
+    
+    new_conversation = {
+        "conversation_id": str(uuid.uuid4()),
+        "user_id": conversation.user_id,
+        "title": conversation.title,
+        "created_at": datetime.now(timezone.utc),
+        "updated_at": datetime.now(timezone.utc),
+        "message_count": 0,
+        "status": "active"
+    }
+    
+    result = await db.conversations.insert_one(new_conversation)
+    
+    new_conversation["_id"] = str(result.inserted_id)
+    
+    return {"success": True, "conversation": new_conversation}
+
+@app.get("/conversations")
+async def get_conversation(user_id: str, skip: int = 0, limit: int = 20):
+    cursor = db.conversations.find({"user_id":user_id}).sort("updated_at",-1).skip(skip).limit(limit)
+    
+    conversations = []
+    async for conv in cursor:
+        conv["_id"] = str(conv["_id"])
+        conversations.append(conv)
+        
+    total_count = await db.conversations.count_documents({"user_id": user_id})
+    
+    return {
+        "conversations": conversations,
+        "total": total_count,
+        "skip": skip,
+        "limit": limit
+        }
+
+@app.put("/conversations/{conversation_id}")
+async def update_conversation(conversation_id: str, updates: ConversationUpdate):
+    # Explicitly type the dictionary to allow mixed types
+    update_data: Dict[str, Union[str, datetime]] = {
+        "updated_at": datetime.now(timezone.utc)
+    }
+    
+    if updates.title is not None:
+        update_data["title"] = updates.title
+    if updates.status is not None:
+        update_data["status"] = updates.status
+    
+    updated_conv = await db.conversations.find_one_and_update(
+        {"conversation_id": conversation_id},
+        {"$set": update_data},
+        return_document=True
+    )
+    
+    if updated_conv is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    
+    updated_conv["_id"] = str(updated_conv["_id"])
+    
+    return {"success": True, "conversation": updated_conv}
+
+@app.delete("/conversations/{conversation_id}")
+async def delete_conversation(conversation_id: str):
+    # Use transaction to ensure both conversation and messages are deleted
+    async with await client.start_session() as session:
+        async with session.start_transaction():
+            # Delete all messages in conversation
+            message_result = await db.messages.delete_many(
+                {"conversation_id": conversation_id},
+                session=session
+            )
+            
+            # Delete conversation
+            conv_result = await db.conversations.delete_one(
+                {"conversation_id": conversation_id},
+                session=session
+            )
+            
+            if conv_result.deleted_count == 0:
+                raise HTTPException(status_code=404, detail="Conversation not found")
+    
+    return {
+        "success": True,
+        "deleted_conversation": True,
+        "deleted_messages": message_result.deleted_count
+    }
+
+@app.get("/conversations/{conversation_id}/messages")
+async def get_conversation_messages(
+    conversation_id: str, 
+    skip: int = 0, 
+    limit: int = 50,
+    order: str = "asc"  # "asc" for chronological, "desc" for recent first
+):
+    # Verify conversation exists
+    conversation = await db.conversations.find_one({"conversation_id": conversation_id})
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    
+    # Set sort order
+    sort_order = 1 if order == "asc" else -1
+    
+    # Query messages
+    cursor = db.messages.find(
+        {"conversation_id": conversation_id}
+    ).sort("timestamp", sort_order).skip(skip).limit(limit)
+    
+    messages = []
+    async for msg in cursor:
+        msg["_id"] = str(msg["_id"])
+        messages.append(msg)
+    
+    # Get total message count
+    total_messages = await db.messages.count_documents(
+        {"conversation_id": conversation_id}
+    )
+    
+    return {
+        "messages": messages,
+        "total": total_messages,
+        "conversation_id": conversation_id,
+        "skip": skip,
+        "limit": limit
+    }
+     
+    
+ 
