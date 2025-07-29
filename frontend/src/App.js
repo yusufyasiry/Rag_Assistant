@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Search, Clock, AlertCircle, FileText, Database, Plus, MessageCircle, Trash2 } from 'lucide-react';
 import axios from 'axios';
 import './App.css';
@@ -12,9 +12,40 @@ const DocumentAssistant = () => {
   const [error, setError] = useState(null);
   const [isLoadingConversations, setIsLoadingConversations] = useState(false);
 
+  // Refs for auto-scrolling
+  const messagesEndRef = useRef(null);
+  const chatMessagesRef = useRef(null);
+  const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
+
   // API base URL
   const API_BASE_URL = 'http://127.0.0.1:8000';
   const USER_ID = 'user123'; // In real app, get from auth
+
+  // Auto-scroll function
+  const scrollToBottom = useCallback(() => {
+    if (shouldAutoScroll && messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ 
+        behavior: 'smooth',
+        block: 'end'
+      });
+    }
+  }, [shouldAutoScroll]);
+
+  // Alternative scroll method for immediate scrolling
+  const scrollToBottomImmediate = useCallback(() => {
+    if (chatMessagesRef.current) {
+      chatMessagesRef.current.scrollTop = chatMessagesRef.current.scrollHeight;
+    }
+  }, []);
+
+  // Check if user is near bottom of chat
+  const handleScroll = useCallback(() => {
+    if (chatMessagesRef.current) {
+      const { scrollTop, scrollHeight, clientHeight } = chatMessagesRef.current;
+      const isNearBottom = scrollHeight - scrollTop - clientHeight < 100; // 100px threshold
+      setShouldAutoScroll(isNearBottom);
+    }
+  }, []);
 
   const formatTime = (timestamp) => {
     const date = new Date(timestamp);
@@ -39,6 +70,24 @@ const DocumentAssistant = () => {
       setMessages([]);
     }
   }, [currentConversation]);
+
+  // Auto-scroll when messages change
+  useEffect(() => {
+    // Use a small timeout to ensure DOM updates are complete
+    const timeoutId = setTimeout(() => {
+      scrollToBottom();
+    }, 100);
+
+    return () => clearTimeout(timeoutId);
+  }, [messages, scrollToBottom]);
+
+  // Auto-scroll when starting to search (for immediate user message display)
+  useEffect(() => {
+    if (isSearching) {
+      setShouldAutoScroll(true);
+      setTimeout(scrollToBottomImmediate, 50);
+    }
+  }, [isSearching, scrollToBottomImmediate]);
 
   const loadConversations = async () => {
     setIsLoadingConversations(true);
@@ -78,6 +127,8 @@ const DocumentAssistant = () => {
       }));
       
       setMessages(frontendMessages);
+      // Reset auto-scroll preference when loading new conversation
+      setShouldAutoScroll(true);
     } catch (error) {
       console.error('Failed to load messages:', error);
       setError('Failed to load conversation history');
@@ -100,6 +151,8 @@ const DocumentAssistant = () => {
       setCurrentConversation(newConversation);
       setMessages([]);
       setError(null);
+      // Ensure auto-scroll is enabled for new conversations
+      setShouldAutoScroll(true);
       
       return newConversation;
     } catch (error) {
@@ -155,6 +208,8 @@ const DocumentAssistant = () => {
     setMessages(prev => [...prev, userMessage]);
     setIsSearching(true);
     setError(null);
+    // Enable auto-scroll when sending new message
+    setShouldAutoScroll(true);
     
     try {
       // Use the conversational endpoint
@@ -220,6 +275,8 @@ const DocumentAssistant = () => {
   const selectConversation = (conversation) => {
     setCurrentConversation(conversation);
     setError(null);
+    // Enable auto-scroll when switching conversations
+    setShouldAutoScroll(true);
   };
 
   const renameConversation = async (conversationId, newTitle) => {
@@ -363,7 +420,11 @@ const DocumentAssistant = () => {
             </div>
 
             {/* Chat Messages */}
-            <div className="chat-messages">
+            <div 
+              className="chat-messages"
+              ref={chatMessagesRef}
+              onScroll={handleScroll}
+            >
               {!currentConversation ? (
                 <div className="welcome-message">
                   <Database size={48} color="#9ca3af" />
@@ -446,6 +507,9 @@ const DocumentAssistant = () => {
                   </div>
                 </div>
               )}
+
+              {/* Invisible div for scrolling to bottom */}
+              <div ref={messagesEndRef} />
             </div>
 
             {/* Chat Input */}

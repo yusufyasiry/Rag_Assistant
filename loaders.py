@@ -1,4 +1,4 @@
-from langchain_unstructured import UnstructuredLoader
+from langchain_community.document_loaders import UnstructuredPDFLoader
 from unstructured.cleaners.core import clean_extra_whitespace
 from langchain_community.document_loaders.csv_loader import UnstructuredCSVLoader
 from langchain_community.document_loaders import UnstructuredHTMLLoader
@@ -22,7 +22,7 @@ class Loader:
         return splitter.split_documents(documents)
 
     def load_pdf(self, file_path: str) -> list:
-        loader = UnstructuredLoader(file_path=file_path, post_processors=[clean_extra_whitespace])
+        loader = UnstructuredPDFLoader(file_path=file_path, mode="single")
         documents = loader.load()
         return self._split_documents(documents)
 
