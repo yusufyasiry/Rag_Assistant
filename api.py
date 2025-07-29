@@ -4,13 +4,15 @@ import os
 import dotenv
 import openai
 from pydantic import BaseModel
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from prompts import Prompts
 from datetime import datetime, timezone
 import uuid
 from motor.motor_asyncio import AsyncIOMotorClient
-from typing import Dict, Any, Optional, Union
+from typing import Dict, Optional, Union
+import tempfile
+from pathlib import Path
 
 
 class Question(BaseModel):
@@ -28,17 +30,21 @@ class ConversationUpdate(BaseModel):
 class MessageCreate(BaseModel):
     conversation_id: str
     question: str
+    is_voice_input: Optional[bool] = False
+    voice_confidence: Optional[float] = None
+    audio_duration: Optional[float] = None
 
+dotenv.load_dotenv()
+openai.api_key = os.getenv("OPEN_API_KEY")
+MONGO_URI = os.getenv("MONGO_URI")
 #connecting db
-client = AsyncIOMotorClient("mongodb+srv://admin:123456!@cluster0.fwq8r3i.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")
+
+client = AsyncIOMotorClient(MONGO_URI)
 db = client["support_assistant"]
 collection = db["embeddings"]
 messages = db["messages"]
 conversations = db["conversations"]
 
-#getting open ai api 
-dotenv.load_dotenv()
-openai.api_key = os.getenv("OPEN_API_KEY")
 
 app = FastAPI()
 
@@ -426,5 +432,42 @@ async def get_conversation_messages(
         "limit": limit
     }
      
+@app.post("/voice/transcribe")
+async def transcribe_audio(audio_file: UploadFile = File(...),language: Optional[str] = None):
+
+    if language not in ['en', 'tr']:
+        raise HTTPException(status_code=400, detail="Only English ('en') and Turkish ('tr') languages are supported")
     
- 
+    if not audio_file.content_type or not audio_file.content_type.startswith('audio/'):
+        raise HTTPException(status_code=400, detail="File must be audio format")
+    
+    if audio_file.size and audio_file.size > 25 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File too large (max 25MB)")
+    
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as temp_file:
+        content = await audio_file.read()
+        temp_file.write(content)
+        temp_file_path = temp_file.name
+        
+    try:
+        with open(temp_file_path, "rb") as audio:
+            transcript = openai.audio.transcriptions.create(
+                model="whisper-1",
+                file=audio,
+                language=language  # Pass the language directly
+            )
+        
+        return {
+            "text": transcript.text,
+            "language": language,  # Return the language that was used
+            "success": True
+        }
+        
+    except openai.APIError as e:
+        raise HTTPException(status_code=400, detail=f"OpenAI API error: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
+    
+    finally:
+        # Cleanup temp file
+        os.unlink(temp_file_path)

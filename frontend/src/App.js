@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Search, Clock, AlertCircle, FileText, Database, Plus, MessageCircle, Trash2 } from 'lucide-react';
+import { Search, Clock, AlertCircle, FileText, Database, Plus, MessageCircle, Trash2, Mic, MicOff, Volume2, VolumeX, Settings } from 'lucide-react';
 import axios from 'axios';
 import './App.css';
 
@@ -12,16 +12,348 @@ const DocumentAssistant = () => {
   const [error, setError] = useState(null);
   const [isLoadingConversations, setIsLoadingConversations] = useState(false);
 
+  // Voice Recording states
+  const [isRecording, setIsRecording] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [mediaRecorder, setMediaRecorder] = useState(null);
+  const [audioChunks, setAudioChunks] = useState([]);
+  const [voiceSupported, setVoiceSupported] = useState(false);
+  const [voiceLanguage, setVoiceLanguage] = useState('en');
+  
+  // Web Speech API fallback states
+  const [webSpeechSupported, setWebSpeechSupported] = useState(false);
+  const [transcript, setTranscript] = useState('');
+  const [confidence, setConfidence] = useState(0);
+  const [useWebSpeech, setUseWebSpeech] = useState(false);
+
+  // Text-to-Speech states
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [speechEnabled, setSpeechEnabled] = useState(true);
+  const [selectedVoice, setSelectedVoice] = useState(null);
+  const [availableVoices, setAvailableVoices] = useState([]);
+  const [speechRate, setSpeechRate] = useState(1);
+  const [speechPitch, setSpeechPitch] = useState(1);
+
+  // Voice settings modal
+  const [showVoiceSettings, setShowVoiceSettings] = useState(false);
+
   // Refs for auto-scrolling
   const messagesEndRef = useRef(null);
   const chatMessagesRef = useRef(null);
   const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
 
+  // Speech recognition ref for Web Speech API fallback
+  const recognitionRef = useRef(null);
+  const speechSynthRef = useRef(null);
+
   // API base URL
   const API_BASE_URL = 'http://127.0.0.1:8000';
   const USER_ID = 'user123'; // In real app, get from auth
 
-  // Auto-scroll function
+  // Initialize voice capabilities
+  useEffect(() => {
+    initializeVoiceCapabilities();
+    
+    return () => {
+      cleanup();
+    };
+  }, []);
+
+  const initializeVoiceCapabilities = async () => {
+    // Check for MediaRecorder support (preferred method)
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder) {
+      setVoiceSupported(true);
+    }
+
+    // Check for Web Speech API as fallback
+    if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+      setWebSpeechSupported(true);
+      initializeWebSpeechAPI();
+    }
+
+    // Initialize Text-to-Speech
+    if ('speechSynthesis' in window) {
+      speechSynthRef.current = window.speechSynthesis;
+      loadVoices();
+      speechSynthRef.current.onvoiceschanged = loadVoices;
+    }
+  };
+
+  const initializeWebSpeechAPI = () => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    recognitionRef.current = new SpeechRecognition();
+    
+    const recognition = recognitionRef.current;
+    recognition.continuous = false;
+    recognition.interimResults = true;
+    recognition.lang = `${voiceLanguage}-${voiceLanguage === 'en' ? 'US' : voiceLanguage === 'tr' ? 'TR' : 'US'}`;
+
+    recognition.onstart = () => {
+      setIsRecording(true);
+      setError(null);
+    };
+
+    recognition.onresult = (event) => {
+      let finalTranscript = '';
+      let interimTranscript = '';
+
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const transcript = event.results[i][0].transcript;
+        if (event.results[i].isFinal) {
+          finalTranscript += transcript;
+          setConfidence(event.results[i][0].confidence);
+        } else {
+          interimTranscript += transcript;
+        }
+      }
+
+      if (finalTranscript) {
+        setQuery(prev => prev + finalTranscript);
+        setTranscript('');
+      } else {
+        setTranscript(interimTranscript);
+      }
+    };
+
+    recognition.onerror = (event) => {
+      console.error('Speech recognition error:', event.error);
+      setError(`Voice recognition error: ${event.error}`);
+      setIsRecording(false);
+    };
+
+    recognition.onend = () => {
+      setIsRecording(false);
+      setTranscript('');
+    };
+  };
+
+  // Update recognition language when voice language changes
+  useEffect(() => {
+    if (recognitionRef.current) {
+      recognitionRef.current.lang = `${voiceLanguage}-${voiceLanguage === 'en' ? 'US' : voiceLanguage === 'tr' ? 'TR' : 'US'}`;
+    }
+  }, [voiceLanguage]);
+
+  const cleanup = () => {
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+      mediaRecorder.stop();
+    }
+    if (recognitionRef.current) {
+      recognitionRef.current.stop();
+    }
+    if (speechSynthRef.current) {
+      speechSynthRef.current.cancel();
+    }
+  };
+
+  // MediaRecorder-based voice recording (preferred method)
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        } 
+      });
+      
+      const recorder = new MediaRecorder(stream, {
+        mimeType: 'audio/webm;codecs=opus'
+      });
+      
+      const chunks = [];
+      
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          chunks.push(event.data);
+        }
+      };
+      
+      recorder.onstop = async () => {
+        const audioBlob = new Blob(chunks, { type: 'audio/webm' });
+        await transcribeAudio(audioBlob);
+        
+        // Cleanup
+        stream.getTracks().forEach(track => track.stop());
+        setAudioChunks([]);
+      };
+      
+      recorder.start();
+      setMediaRecorder(recorder);
+      setAudioChunks(chunks);
+      setIsRecording(true);
+      setError(null);
+      
+    } catch (error) {
+      console.error('Error starting recording:', error);
+      setError('Could not access microphone. Please check permissions.');
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+      mediaRecorder.stop();
+      setIsRecording(false);
+    }
+  };
+
+  // Transcribe audio using backend Whisper API
+  const transcribeAudio = async (audioBlob) => {
+    setIsTranscribing(true);
+    
+    try {
+      const formData = new FormData();
+      formData.append('audio_file', audioBlob, 'recording.webm');
+      
+      // Always send language (no auto-detect)
+      formData.append('language', voiceLanguage);
+      
+      const response = await axios.post(`${API_BASE_URL}/voice/transcribe`, formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+      });
+      
+      const { text, confidence } = response.data;
+      
+      if (text && text.trim()) {
+        // Check for voice commands first
+        if (!processVoiceCommand(text.trim())) {
+          setQuery(prev => prev + text);
+          if (confidence) {
+            setConfidence(confidence);
+          }
+        }
+      }
+      
+    } catch (error) {
+      console.error('Transcription error:', error);
+      const errorMessage = error.response?.data?.detail || 'Failed to transcribe audio';
+      setError(`Transcription failed: ${errorMessage}`);
+    } finally {
+      setIsTranscribing(false);
+    }
+  };
+
+  // Web Speech API fallback methods
+  const startWebSpeechRecording = () => {
+    if (recognitionRef.current && webSpeechSupported) {
+      try {
+        recognitionRef.current.start();
+      } catch (error) {
+        console.error('Error starting speech recognition:', error);
+        setError('Could not start voice recognition');
+      }
+    }
+  };
+
+  const stopWebSpeechRecording = () => {
+    if (recognitionRef.current) {
+      recognitionRef.current.stop();
+    }
+  };
+
+  // Main voice recording toggle
+  const toggleRecording = () => {
+    if (isRecording) {
+      if (useWebSpeech) {
+        stopWebSpeechRecording();
+      } else {
+        stopRecording();
+      }
+    } else {
+      if (useWebSpeech) {
+        startWebSpeechRecording();
+      } else {
+        startRecording();
+      }
+    }
+  };
+
+  // Load available voices for TTS
+  const loadVoices = () => {
+    if (speechSynthRef.current) {
+      const voices = speechSynthRef.current.getVoices();
+      setAvailableVoices(voices);
+      
+      if (!selectedVoice && voices.length > 0) {
+        const defaultVoice = voices.find(voice => 
+          voice.lang.startsWith(voiceLanguage)
+        ) || voices[0];
+        setSelectedVoice(defaultVoice);
+      }
+    }
+  };
+
+  // Text-to-Speech Functions
+  const speakText = (text) => {
+    if (!speechSynthRef.current || !speechEnabled || !text.trim()) return;
+
+    speechSynthRef.current.cancel();
+
+    const utterance = new SpeechSynthesisUtterance(text);
+    
+    if (selectedVoice) {
+      utterance.voice = selectedVoice;
+    }
+    
+    utterance.rate = speechRate;
+    utterance.pitch = speechPitch;
+    utterance.volume = 1;
+
+    utterance.onstart = () => setIsSpeaking(true);
+    utterance.onend = () => setIsSpeaking(false);
+    utterance.onerror = (event) => {
+      console.error('Speech synthesis error:', event.error);
+      setIsSpeaking(false);
+    };
+
+    speechSynthRef.current.speak(utterance);
+  };
+
+  const stopSpeaking = () => {
+    if (speechSynthRef.current) {
+      speechSynthRef.current.cancel();
+      setIsSpeaking(false);
+    }
+  };
+
+  // Voice Commands
+  const processVoiceCommand = (command) => {
+    const lowerCommand = command.toLowerCase().trim();
+    
+    if (lowerCommand.includes('new chat') || lowerCommand.includes('start new conversation')) {
+      createNewConversation();
+      return true;
+    }
+    
+    if (lowerCommand.includes('delete conversation') || lowerCommand.includes('delete chat')) {
+      if (currentConversation) {
+        deleteConversation(currentConversation.conversation_id);
+      }
+      return true;
+    }
+    
+    if (lowerCommand.includes('repeat') || lowerCommand.includes('say again')) {
+      const lastAssistantMessage = messages
+        .slice()
+        .reverse()
+        .find(msg => msg.type === 'assistant');
+      if (lastAssistantMessage) {
+        speakText(lastAssistantMessage.content);
+      }
+      return true;
+    }
+    
+    if (lowerCommand.includes('clear input') || lowerCommand.includes('clear text')) {
+      setQuery('');
+      return true;
+    }
+    
+    return false;
+  };
+
+  // Auto-scroll functions
   const scrollToBottom = useCallback(() => {
     if (shouldAutoScroll && messagesEndRef.current) {
       messagesEndRef.current.scrollIntoView({ 
@@ -31,18 +363,16 @@ const DocumentAssistant = () => {
     }
   }, [shouldAutoScroll]);
 
-  // Alternative scroll method for immediate scrolling
   const scrollToBottomImmediate = useCallback(() => {
     if (chatMessagesRef.current) {
       chatMessagesRef.current.scrollTop = chatMessagesRef.current.scrollHeight;
     }
   }, []);
 
-  // Check if user is near bottom of chat
   const handleScroll = useCallback(() => {
     if (chatMessagesRef.current) {
       const { scrollTop, scrollHeight, clientHeight } = chatMessagesRef.current;
-      const isNearBottom = scrollHeight - scrollTop - clientHeight < 100; // 100px threshold
+      const isNearBottom = scrollHeight - scrollTop - clientHeight < 100;
       setShouldAutoScroll(isNearBottom);
     }
   }, []);
@@ -73,7 +403,6 @@ const DocumentAssistant = () => {
 
   // Auto-scroll when messages change
   useEffect(() => {
-    // Use a small timeout to ensure DOM updates are complete
     const timeoutId = setTimeout(() => {
       scrollToBottom();
     }, 100);
@@ -81,7 +410,7 @@ const DocumentAssistant = () => {
     return () => clearTimeout(timeoutId);
   }, [messages, scrollToBottom]);
 
-  // Auto-scroll when starting to search (for immediate user message display)
+  // Auto-scroll when starting to search
   useEffect(() => {
     if (isSearching) {
       setShouldAutoScroll(true);
@@ -97,7 +426,6 @@ const DocumentAssistant = () => {
       });
       setConversations(response.data.conversations);
       
-      // If no current conversation and we have conversations, select the first one
       if (!currentConversation && response.data.conversations.length > 0) {
         setCurrentConversation(response.data.conversations[0]);
       }
@@ -114,20 +442,19 @@ const DocumentAssistant = () => {
       const response = await axios.get(`${API_BASE_URL}/conversations/${conversationId}/messages`);
       const backendMessages = response.data.messages;
       
-      // Convert backend messages to frontend format
       const frontendMessages = backendMessages.map(msg => ({
         id: msg._id || msg.message_id,
-        type: msg.role, // 'user' or 'assistant'
+        type: msg.role,
         content: msg.content,
         sources: msg.sources ? msg.sources.map((chunk, index) => ({
           name: `Source ${index + 1}`,
           snippet: chunk.length > 150 ? chunk.substring(0, 150) + "..." : chunk
         })) : [],
-        timestamp: new Date(msg.timestamp)
+        timestamp: new Date(msg.timestamp),
+        voiceMetadata: msg.voice_metadata
       }));
       
       setMessages(frontendMessages);
-      // Reset auto-scroll preference when loading new conversation
       setShouldAutoScroll(true);
     } catch (error) {
       console.error('Failed to load messages:', error);
@@ -151,7 +478,6 @@ const DocumentAssistant = () => {
       setCurrentConversation(newConversation);
       setMessages([]);
       setError(null);
-      // Ensure auto-scroll is enabled for new conversations
       setShouldAutoScroll(true);
       
       return newConversation;
@@ -166,10 +492,8 @@ const DocumentAssistant = () => {
     try {
       await axios.delete(`${API_BASE_URL}/conversations/${conversationId}`);
       
-      // Remove from conversations list
       setConversations(prev => prev.filter(conv => conv.conversation_id !== conversationId));
       
-      // If this was the current conversation, clear it
       if (currentConversation && currentConversation.conversation_id === conversationId) {
         setCurrentConversation(null);
         setMessages([]);
@@ -184,11 +508,17 @@ const DocumentAssistant = () => {
     if (!query.trim()) return;
 
     const currentQuery = query;
-    setQuery(''); // Clear input immediately
+    
+    // Check for voice commands first
+    if (processVoiceCommand(currentQuery)) {
+      setQuery('');
+      return;
+    }
+
+    setQuery('');
     
     let targetConversation = currentConversation;
     
-    // Create conversation if none exists
     if (!targetConversation) {
       targetConversation = await createNewConversation(currentQuery);
       if (!targetConversation) {
@@ -197,30 +527,32 @@ const DocumentAssistant = () => {
       }
     }
 
-    // Add user message to UI immediately
     const userMessage = {
       id: Date.now(),
       type: 'user',
       content: currentQuery,
-      timestamp: new Date()
+      timestamp: new Date(),
+      voiceMetadata: confidence > 0 ? { confidence } : null
     };
     
     setMessages(prev => [...prev, userMessage]);
     setIsSearching(true);
     setError(null);
-    // Enable auto-scroll when sending new message
     setShouldAutoScroll(true);
     
+    // Reset confidence after using it
+    setConfidence(0);
+    
     try {
-      // Use the conversational endpoint
       const response = await axios.post(`${API_BASE_URL}/chat/${targetConversation.conversation_id}`, {
         conversation_id: targetConversation.conversation_id,
-        question: currentQuery
+        question: currentQuery,
+        is_voice_input: confidence > 0,
+        voice_confidence: confidence > 0 ? confidence : null
       });
       
       const apiResult = response.data;
       
-      // Add assistant message to UI
       const assistantMessage = {
         id: Date.now() + 1,
         type: 'assistant',
@@ -234,14 +566,17 @@ const DocumentAssistant = () => {
       
       setMessages(prev => [...prev, assistantMessage]);
       
-      // Update conversation metadata
+      // Auto-speak assistant response if speech is enabled
+      if (speechEnabled && apiResult.answer) {
+        setTimeout(() => speakText(apiResult.answer), 500);
+      }
+      
       setCurrentConversation(prev => ({
         ...prev,
-        message_count: (prev.message_count || 0) + 2, // +2 for user and assistant
+        message_count: (prev.message_count || 0) + 2,
         updated_at: new Date().toISOString()
       }));
       
-      // Update conversations list to reflect new message count and timestamp
       setConversations(prev => prev.map(conv => 
         conv.conversation_id === targetConversation.conversation_id
           ? {
@@ -255,7 +590,6 @@ const DocumentAssistant = () => {
     } catch (error) {
       console.error('Chat error:', error);
       
-      // Show error details if available
       const errorMessage = error.response?.data?.detail || 'Failed to get response. Please try again.';
       setError(errorMessage);
       
@@ -275,30 +609,7 @@ const DocumentAssistant = () => {
   const selectConversation = (conversation) => {
     setCurrentConversation(conversation);
     setError(null);
-    // Enable auto-scroll when switching conversations
     setShouldAutoScroll(true);
-  };
-
-  const renameConversation = async (conversationId, newTitle) => {
-    try {
-      await axios.put(`${API_BASE_URL}/conversations/${conversationId}`, {
-        title: newTitle
-      });
-      
-      // Update local state
-      setConversations(prev => prev.map(conv => 
-        conv.conversation_id === conversationId 
-          ? { ...conv, title: newTitle }
-          : conv
-      ));
-      
-      if (currentConversation && currentConversation.conversation_id === conversationId) {
-        setCurrentConversation(prev => ({ ...prev, title: newTitle }));
-      }
-    } catch (error) {
-      console.error('Failed to rename conversation:', error);
-      setError('Failed to rename conversation');
-    }
   };
 
   const handleKeyPress = (e) => {
@@ -307,6 +618,111 @@ const DocumentAssistant = () => {
       handleSearch();
     }
   };
+
+  // Voice Settings Modal Component
+  const VoiceSettingsModal = () => (
+    <div className="voice-settings-modal" style={{ display: showVoiceSettings ? 'flex' : 'none' }}>
+      <div className="voice-settings-content">
+        <div className="voice-settings-header">
+          <h3>Voice Settings</h3>
+          <button onClick={() => setShowVoiceSettings(false)} className="close-button">×</button>
+        </div>
+        
+        <div className="voice-settings-body">
+          <div className="setting-group">
+            <label>Voice Input Method</label>
+            <select 
+              value={useWebSpeech ? 'webspeech' : 'whisper'} 
+              onChange={(e) => setUseWebSpeech(e.target.value === 'webspeech')}
+              className="setting-select"
+            >
+              <option value="whisper">Whisper API (Recommended)</option>
+              {webSpeechSupported && <option value="webspeech">Web Speech API (Fallback)</option>}
+            </select>
+            <small className="setting-help">
+              Whisper provides better accuracy but requires internet. Web Speech works offline in supported browsers.
+            </small>
+          </div>
+
+          <div className="setting-group">
+            <label>Recognition Language</label>
+            <select 
+              value={voiceLanguage} 
+              onChange={(e) => setVoiceLanguage(e.target.value)}
+              className="setting-select"
+            >
+              <option value="en">English</option>
+              <option value="tr">Türkçe</option>
+            </select>
+            <small className="setting-help">
+              Select the language you'll be speaking in. This helps improve recognition accuracy.
+            </small>
+          </div>
+
+          <div className="setting-group">
+            <label>Speech Voice</label>
+            <select 
+              value={selectedVoice?.name || ''} 
+              onChange={(e) => {
+                const voice = availableVoices.find(v => v.name === e.target.value);
+                setSelectedVoice(voice);
+              }}
+              className="setting-select"
+            >
+              {availableVoices.map((voice, index) => (
+                <option key={index} value={voice.name}>
+                  {voice.name} ({voice.lang})
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="setting-group">
+            <label>Speech Rate: {speechRate}</label>
+            <input
+              type="range"
+              min="0.5"
+              max="2"
+              step="0.1"
+              value={speechRate}
+              onChange={(e) => setSpeechRate(parseFloat(e.target.value))}
+              className="setting-slider"
+            />
+          </div>
+
+          <div className="setting-group">
+            <label>Speech Pitch: {speechPitch}</label>
+            <input
+              type="range"
+              min="0"
+              max="2"
+              step="0.1"
+              value={speechPitch}
+              onChange={(e) => setSpeechPitch(parseFloat(e.target.value))}
+              className="setting-slider"
+            />
+          </div>
+
+          <div className="setting-group">
+            <label className="checkbox-label">
+              <input
+                type="checkbox"
+                checked={speechEnabled}
+                onChange={(e) => setSpeechEnabled(e.target.checked)}
+              />
+              Auto-read Assistant Responses
+            </label>
+          </div>
+        </div>
+
+        <div className="voice-settings-footer">
+          <button onClick={() => speakText("This is a test of your voice settings")} className="test-voice-button">
+            Test Voice
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 
   return (
     <div className="app">
@@ -318,6 +734,15 @@ const DocumentAssistant = () => {
               <Database size={32} color="white" />
             </div>
             <h1 className="title">Document Assistant</h1>
+            <div className="header-controls">
+              <button 
+                onClick={() => setShowVoiceSettings(true)}
+                className="voice-settings-button"
+                title="Voice Settings"
+              >
+                <Settings size={20} />
+              </button>
+            </div>
           </div>
         </div>
       </header>
@@ -409,14 +834,32 @@ const DocumentAssistant = () => {
                   }
                 </p>
               </div>
-              {currentConversation && (
-                <button 
-                  onClick={() => createNewConversation()} 
-                  className="new-chat-button-small"
-                >
-                  <Plus size={16} />
-                </button>
-              )}
+              <div className="chat-header-controls">
+                {(voiceSupported || webSpeechSupported) && (
+                  <div className="voice-status">
+                    {isRecording && (
+                      <span className="listening-indicator">
+                        <div className="pulse"></div>
+                        {isTranscribing ? 'Transcribing...' : 'Recording...'}
+                      </span>
+                    )}
+                    {isSpeaking && (
+                      <span className="speaking-indicator">
+                        <Volume2 size={16} />
+                        Speaking...
+                      </span>
+                    )}
+                  </div>
+                )}
+                {currentConversation && (
+                  <button 
+                    onClick={() => createNewConversation()} 
+                    className="new-chat-button-small"
+                  >
+                    <Plus size={16} />
+                  </button>
+                )}
+              </div>
             </div>
 
             {/* Chat Messages */}
@@ -430,6 +873,12 @@ const DocumentAssistant = () => {
                   <Database size={48} color="#9ca3af" />
                   <h3>Welcome to Document Assistant</h3>
                   <p>Create a new conversation to start chatting with your documents.</p>
+                  {(voiceSupported || webSpeechSupported) && (
+                    <p className="voice-hint">
+                      <Mic size={16} />
+                      Voice input is available! Click the microphone to start.
+                    </p>
+                  )}
                   
                   <button 
                     onClick={() => createNewConversation()} 
@@ -444,6 +893,19 @@ const DocumentAssistant = () => {
                   <MessageCircle size={48} color="#9ca3af" />
                   <h3>Start the Conversation</h3>
                   <p>Ask me anything about your documents. I'll search through them and provide you with accurate answers.</p>
+                  
+                  {/* Voice Commands Help */}
+                  {(voiceSupported || webSpeechSupported) && (
+                    <div className="voice-commands-help">
+                      <h4>Voice Commands:</h4>
+                      <ul>
+                        <li>"New chat" - Start a new conversation</li>
+                        <li>"Delete conversation" - Delete current chat</li>
+                        <li>"Repeat" - Repeat last response</li>
+                        <li>"Clear input" - Clear the input field</li>
+                      </ul>
+                    </div>
+                  )}
                   
                   {/* Quick suggestions */}
                   <div className="suggestions">
@@ -468,10 +930,26 @@ const DocumentAssistant = () => {
                           {message.type === 'user' ? 'You' : message.type === 'error' ? 'Error' : 'Assistant'}
                         </span>
                         <span className="message-time">{formatTime(message.timestamp)}</span>
+                        {message.type === 'assistant' && (
+                          <button
+                            onClick={() => speakText(message.content)}
+                            className="speak-message-button"
+                            title="Read aloud"
+                          >
+                            <Volume2 size={14} />
+                          </button>
+                        )}
                       </div>
                       <div className="message-text">
                         {message.content}
                       </div>
+                      
+                      {/* Show transcript confidence for user messages if they came from voice */}
+                      {message.type === 'user' && message.voiceMetadata && message.voiceMetadata.confidence && (
+                        <div className="voice-confidence">
+                          Voice confidence: {Math.round(message.voiceMetadata.confidence * 100)}%
+                        </div>
+                      )}
                       
                       {/* Show sources for assistant messages */}
                       {message.type === 'assistant' && message.sources && message.sources.length > 0 && (
@@ -526,15 +1004,38 @@ const DocumentAssistant = () => {
                   </button>
                 </div>
               )}
+
+              {/* Voice transcript preview */}
+              {transcript && (
+                <div className="transcript-preview">
+                  <span className="transcript-label">Listening:</span>
+                  <span className="transcript-text">{transcript}</span>
+                </div>
+              )}
+
+              {/* Transcribing indicator */}
+              {isTranscribing && (
+                <div className="transcript-preview">
+                  <span className="transcript-label">Transcribing:</span>
+                  <span className="transcript-text">
+                    <Clock size={14} className="animate-spin" style={{ display: 'inline-block', marginRight: '8px' }} />
+                    Processing audio...
+                  </span>
+                </div>
+              )}
               
               <div className="chat-input-wrapper">
                 <textarea
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Ask anything about your documents..."
-                  className="chat-input"
+                  placeholder={
+                    isRecording ? 
+                      (isTranscribing ? "Transcribing audio..." : "Recording... Speak now") : 
+                      "Ask anything about your documents..."
+                  }
+                  className={`chat-input ${isRecording ? 'listening' : ''}`}
                   onKeyDown={handleKeyPress}
-                  disabled={isSearching}
+                  disabled={isSearching || isTranscribing}
                   rows={1}
                   style={{
                     resize: 'none',
@@ -543,9 +1044,34 @@ const DocumentAssistant = () => {
                     overflow: 'auto'
                   }}
                 />
+                
+                {/* Voice Controls */}
+                <div className="voice-controls">
+                  {(voiceSupported || webSpeechSupported) && (
+                    <button
+                      onClick={toggleRecording}
+                      className={`voice-button ${isRecording ? 'listening' : ''}`}
+                      title={isRecording ? 'Stop recording' : 'Start voice input'}
+                      disabled={isSearching || isTranscribing}
+                    >
+                      {isRecording ? <MicOff size={20} /> : <Mic size={20} />}
+                    </button>
+                  )}
+                  
+                  {isSpeaking && (
+                    <button
+                      onClick={stopSpeaking}
+                      className="stop-speech-button"
+                      title="Stop speaking"
+                    >
+                      <VolumeX size={20} />
+                    </button>
+                  )}
+                </div>
+
                 <button
                   onClick={handleSearch}
-                  disabled={isSearching || !query.trim()}
+                  disabled={isSearching || isTranscribing || !query.trim()}
                   className="send-button"
                 >
                   <Search size={20} />
@@ -555,6 +1081,9 @@ const DocumentAssistant = () => {
           </div>
         </div>
       </div>
+
+      {/* Voice Settings Modal */}
+      <VoiceSettingsModal />
     </div>
   );
 };
