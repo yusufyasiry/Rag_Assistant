@@ -433,41 +433,77 @@ async def get_conversation_messages(
     }
      
 @app.post("/voice/transcribe")
-async def transcribe_audio(audio_file: UploadFile = File(...),language: Optional[str] = None):
-
-    if language not in ['en', 'tr']:
-        raise HTTPException(status_code=400, detail="Only English ('en') and Turkish ('tr') languages are supported")
+async def transcribe_audio(
+    audio_file: UploadFile = File(...),
+    language: Optional[str] = None  # Optional language parameter
+):
+    """
+    Convert audio to text using Whisper API
+    Supports auto-detection or specific language selection
+    """
     
+    # Validate file
     if not audio_file.content_type or not audio_file.content_type.startswith('audio/'):
         raise HTTPException(status_code=400, detail="File must be audio format")
     
+    # Validate file size (Whisper has 25MB limit)
     if audio_file.size and audio_file.size > 25 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="File too large (max 25MB)")
     
+    # Create temporary file for Whisper
     with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as temp_file:
         content = await audio_file.read()
         temp_file.write(content)
         temp_file_path = temp_file.name
-        
+    
     try:
         with open(temp_file_path, "rb") as audio:
-            transcript = openai.audio.transcriptions.create(
-                model="whisper-1",
-                file=audio,
-                language=language  # Pass the language directly
-            )
+            # Prepare parameters for Whisper API
+            whisper_params = {
+                "model": "whisper-1",
+                "file": audio,
+                "response_format": "verbose_json"  # Get detailed response with language detection
+            }
+            
+            # Only add language if specified (let Whisper auto-detect otherwise)
+            if language and language != 'auto':
+                whisper_params["language"] = language
+            
+            transcript = openai.audio.transcriptions.create(**whisper_params)
+        
+        # Extract information from the response
+        transcribed_text = transcript.text
+        detected_language = getattr(transcript, 'language', 'unknown')
+        
+        # Calculate average confidence if segments are available
+        confidence = None
+        if hasattr(transcript, 'segments') and transcript.segments:
+            # Calculate average confidence from all segments
+            total_confidence = sum(segment.avg_logprob for segment in transcript.segments)
+            confidence = total_confidence / len(transcript.segments)
+            # Convert log probability to a more intuitive confidence score (0-1)
+            confidence = max(0, min(1, (confidence + 1) / 1))  # Rough conversion
         
         return {
-            "text": transcript.text,
-            "language": language,  # Return the language that was used
-            "success": True
+            "text": transcribed_text,
+            "language": detected_language,
+            "confidence": confidence,
+            "success": True,
+            "auto_detected": language is None or language == 'auto'
         }
         
     except openai.APIError as e:
-        raise HTTPException(status_code=400, detail=f"OpenAI API error: {str(e)}")
+        error_message = str(e)
+        if "invalid_request_error" in error_message:
+            raise HTTPException(status_code=400, detail="Invalid audio format or corrupted file")
+        elif "rate_limit_exceeded" in error_message:
+            raise HTTPException(status_code=429, detail="Rate limit exceeded. Please try again later.")
+        else:
+            raise HTTPException(status_code=500, detail=f"OpenAI API error: {error_message}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
     
     finally:
         # Cleanup temp file
-        os.unlink(temp_file_path)
+        if os.path.exists(temp_file_path):
+            os.unlink(temp_file_path)

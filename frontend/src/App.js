@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Search, Clock, AlertCircle, FileText, Database, Plus, MessageCircle, Trash2, Mic, MicOff, Volume2, VolumeX, Settings } from 'lucide-react';
+import { Search, Clock, AlertCircle, FileText, Database, Plus, MessageCircle, Trash2, Mic, MicOff, Settings } from 'lucide-react';
 import axios from 'axios';
 import './App.css';
 
@@ -18,21 +18,14 @@ const DocumentAssistant = () => {
   const [mediaRecorder, setMediaRecorder] = useState(null);
   const [audioChunks, setAudioChunks] = useState([]);
   const [voiceSupported, setVoiceSupported] = useState(false);
-  const [voiceLanguage, setVoiceLanguage] = useState('en');
+  const [voiceLanguage, setVoiceLanguage] = useState('auto');
+  const [detectedLanguage, setDetectedLanguage] = useState(null);
   
   // Web Speech API fallback states
   const [webSpeechSupported, setWebSpeechSupported] = useState(false);
   const [transcript, setTranscript] = useState('');
   const [confidence, setConfidence] = useState(0);
   const [useWebSpeech, setUseWebSpeech] = useState(false);
-
-  // Text-to-Speech states
-  const [isSpeaking, setIsSpeaking] = useState(false);
-  const [speechEnabled, setSpeechEnabled] = useState(true);
-  const [selectedVoice, setSelectedVoice] = useState(null);
-  const [availableVoices, setAvailableVoices] = useState([]);
-  const [speechRate, setSpeechRate] = useState(1);
-  const [speechPitch, setSpeechPitch] = useState(1);
 
   // Voice settings modal
   const [showVoiceSettings, setShowVoiceSettings] = useState(false);
@@ -44,7 +37,6 @@ const DocumentAssistant = () => {
 
   // Speech recognition ref for Web Speech API fallback
   const recognitionRef = useRef(null);
-  const speechSynthRef = useRef(null);
 
   // API base URL
   const API_BASE_URL = 'http://127.0.0.1:8000';
@@ -69,13 +61,6 @@ const DocumentAssistant = () => {
     if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
       setWebSpeechSupported(true);
       initializeWebSpeechAPI();
-    }
-
-    // Initialize Text-to-Speech
-    if ('speechSynthesis' in window) {
-      speechSynthRef.current = window.speechSynthesis;
-      loadVoices();
-      speechSynthRef.current.onvoiceschanged = loadVoices;
     }
   };
 
@@ -141,9 +126,6 @@ const DocumentAssistant = () => {
     if (recognitionRef.current) {
       recognitionRef.current.stop();
     }
-    if (speechSynthRef.current) {
-      speechSynthRef.current.cancel();
-    }
   };
 
   // MediaRecorder-based voice recording (preferred method)
@@ -205,8 +187,10 @@ const DocumentAssistant = () => {
       const formData = new FormData();
       formData.append('audio_file', audioBlob, 'recording.webm');
       
-      // Always send language (no auto-detect)
-      formData.append('language', voiceLanguage);
+      // Only send language if not auto-detect
+      if (voiceLanguage && voiceLanguage !== 'auto') {
+        formData.append('language', voiceLanguage);
+      }
       
       const response = await axios.post(`${API_BASE_URL}/voice/transcribe`, formData, {
         headers: {
@@ -214,9 +198,14 @@ const DocumentAssistant = () => {
         },
       });
       
-      const { text, confidence } = response.data;
+      const { text, confidence, language, auto_detected } = response.data;
       
       if (text && text.trim()) {
+        // Store detected language info
+        if (auto_detected && language) {
+          setDetectedLanguage(language);
+        }
+        
         // Check for voice commands first
         if (!processVoiceCommand(text.trim())) {
           setQuery(prev => prev + text);
@@ -270,54 +259,6 @@ const DocumentAssistant = () => {
     }
   };
 
-  // Load available voices for TTS
-  const loadVoices = () => {
-    if (speechSynthRef.current) {
-      const voices = speechSynthRef.current.getVoices();
-      setAvailableVoices(voices);
-      
-      if (!selectedVoice && voices.length > 0) {
-        const defaultVoice = voices.find(voice => 
-          voice.lang.startsWith(voiceLanguage)
-        ) || voices[0];
-        setSelectedVoice(defaultVoice);
-      }
-    }
-  };
-
-  // Text-to-Speech Functions
-  const speakText = (text) => {
-    if (!speechSynthRef.current || !speechEnabled || !text.trim()) return;
-
-    speechSynthRef.current.cancel();
-
-    const utterance = new SpeechSynthesisUtterance(text);
-    
-    if (selectedVoice) {
-      utterance.voice = selectedVoice;
-    }
-    
-    utterance.rate = speechRate;
-    utterance.pitch = speechPitch;
-    utterance.volume = 1;
-
-    utterance.onstart = () => setIsSpeaking(true);
-    utterance.onend = () => setIsSpeaking(false);
-    utterance.onerror = (event) => {
-      console.error('Speech synthesis error:', event.error);
-      setIsSpeaking(false);
-    };
-
-    speechSynthRef.current.speak(utterance);
-  };
-
-  const stopSpeaking = () => {
-    if (speechSynthRef.current) {
-      speechSynthRef.current.cancel();
-      setIsSpeaking(false);
-    }
-  };
-
   // Voice Commands
   const processVoiceCommand = (command) => {
     const lowerCommand = command.toLowerCase().trim();
@@ -330,17 +271,6 @@ const DocumentAssistant = () => {
     if (lowerCommand.includes('delete conversation') || lowerCommand.includes('delete chat')) {
       if (currentConversation) {
         deleteConversation(currentConversation.conversation_id);
-      }
-      return true;
-    }
-    
-    if (lowerCommand.includes('repeat') || lowerCommand.includes('say again')) {
-      const lastAssistantMessage = messages
-        .slice()
-        .reverse()
-        .find(msg => msg.type === 'assistant');
-      if (lastAssistantMessage) {
-        speakText(lastAssistantMessage.content);
       }
       return true;
     }
@@ -566,11 +496,6 @@ const DocumentAssistant = () => {
       
       setMessages(prev => [...prev, assistantMessage]);
       
-      // Auto-speak assistant response if speech is enabled
-      if (speechEnabled && apiResult.answer) {
-        setTimeout(() => speakText(apiResult.answer), 500);
-      }
-      
       setCurrentConversation(prev => ({
         ...prev,
         message_count: (prev.message_count || 0) + 2,
@@ -619,12 +544,32 @@ const DocumentAssistant = () => {
     }
   };
 
+  // Helper function to get language display name
+  const getLanguageName = (languageCode) => {
+    const languageNames = {
+      'en': 'English',
+      'tr': 'Türkçe',
+      'de': 'Deutsch',
+      'fr': 'Français',
+      'es': 'Español',
+      'it': 'Italiano',
+      'pt': 'Português',
+      'ru': 'Русский',
+      'ja': '日本語',
+      'ko': '한국어',
+      'zh': '中文',
+      'ar': 'العربية',
+      'hi': 'हिन्दी'
+    };
+    return languageNames[languageCode] || languageCode;
+  };
+
   // Voice Settings Modal Component
   const VoiceSettingsModal = () => (
     <div className="voice-settings-modal" style={{ display: showVoiceSettings ? 'flex' : 'none' }}>
       <div className="voice-settings-content">
         <div className="voice-settings-header">
-          <h3>Voice Settings</h3>
+          <h3>Voice Input Settings</h3>
           <button onClick={() => setShowVoiceSettings(false)} className="close-button">×</button>
         </div>
         
@@ -640,7 +585,7 @@ const DocumentAssistant = () => {
               {webSpeechSupported && <option value="webspeech">Web Speech API (Fallback)</option>}
             </select>
             <small className="setting-help">
-              Whisper provides better accuracy but requires internet. Web Speech works offline in supported browsers.
+              Whisper provides better accuracy and auto-detects language. Web Speech works offline in supported browsers.
             </small>
           </div>
 
@@ -651,74 +596,32 @@ const DocumentAssistant = () => {
               onChange={(e) => setVoiceLanguage(e.target.value)}
               className="setting-select"
             >
+              <option value="auto">Auto-detect (Recommended)</option>
               <option value="en">English</option>
               <option value="tr">Türkçe</option>
+              <option value="de">Deutsch</option>
+              <option value="fr">Français</option>
+              <option value="es">Español</option>
+              <option value="it">Italiano</option>
+              <option value="pt">Português</option>
+              <option value="ru">Русский</option>
+              <option value="ja">日本語</option>
+              <option value="ko">한국어</option>
+              <option value="zh">中文</option>
             </select>
             <small className="setting-help">
-              Select the language you'll be speaking in. This helps improve recognition accuracy.
+              Auto-detect lets Whisper automatically identify the language you're speaking. Manual selection can improve accuracy for specific languages.
             </small>
           </div>
 
           <div className="setting-group">
-            <label>Speech Voice</label>
-            <select 
-              value={selectedVoice?.name || ''} 
-              onChange={(e) => {
-                const voice = availableVoices.find(v => v.name === e.target.value);
-                setSelectedVoice(voice);
-              }}
-              className="setting-select"
-            >
-              {availableVoices.map((voice, index) => (
-                <option key={index} value={voice.name}>
-                  {voice.name} ({voice.lang})
-                </option>
-              ))}
-            </select>
+            <h4 style={{ marginBottom: '10px', color: '#374151', fontSize: '14px' }}>Available Voice Commands:</h4>
+            <ul style={{ margin: 0, paddingLeft: '20px', fontSize: '13px', color: '#6b7280' }}>
+              <li>"New chat" - Start a new conversation</li>
+              <li>"Delete conversation" - Delete current chat</li>
+              <li>"Clear input" - Clear the input field</li>
+            </ul>
           </div>
-
-          <div className="setting-group">
-            <label>Speech Rate: {speechRate}</label>
-            <input
-              type="range"
-              min="0.5"
-              max="2"
-              step="0.1"
-              value={speechRate}
-              onChange={(e) => setSpeechRate(parseFloat(e.target.value))}
-              className="setting-slider"
-            />
-          </div>
-
-          <div className="setting-group">
-            <label>Speech Pitch: {speechPitch}</label>
-            <input
-              type="range"
-              min="0"
-              max="2"
-              step="0.1"
-              value={speechPitch}
-              onChange={(e) => setSpeechPitch(parseFloat(e.target.value))}
-              className="setting-slider"
-            />
-          </div>
-
-          <div className="setting-group">
-            <label className="checkbox-label">
-              <input
-                type="checkbox"
-                checked={speechEnabled}
-                onChange={(e) => setSpeechEnabled(e.target.checked)}
-              />
-              Auto-read Assistant Responses
-            </label>
-          </div>
-        </div>
-
-        <div className="voice-settings-footer">
-          <button onClick={() => speakText("This is a test of your voice settings")} className="test-voice-button">
-            Test Voice
-          </button>
         </div>
       </div>
     </div>
@@ -843,12 +746,6 @@ const DocumentAssistant = () => {
                         {isTranscribing ? 'Transcribing...' : 'Recording...'}
                       </span>
                     )}
-                    {isSpeaking && (
-                      <span className="speaking-indicator">
-                        <Volume2 size={16} />
-                        Speaking...
-                      </span>
-                    )}
                   </div>
                 )}
                 {currentConversation && (
@@ -901,7 +798,6 @@ const DocumentAssistant = () => {
                       <ul>
                         <li>"New chat" - Start a new conversation</li>
                         <li>"Delete conversation" - Delete current chat</li>
-                        <li>"Repeat" - Repeat last response</li>
                         <li>"Clear input" - Clear the input field</li>
                       </ul>
                     </div>
@@ -930,15 +826,6 @@ const DocumentAssistant = () => {
                           {message.type === 'user' ? 'You' : message.type === 'error' ? 'Error' : 'Assistant'}
                         </span>
                         <span className="message-time">{formatTime(message.timestamp)}</span>
-                        {message.type === 'assistant' && (
-                          <button
-                            onClick={() => speakText(message.content)}
-                            className="speak-message-button"
-                            title="Read aloud"
-                          >
-                            <Volume2 size={14} />
-                          </button>
-                        )}
                       </div>
                       <div className="message-text">
                         {message.content}
@@ -1023,6 +910,14 @@ const DocumentAssistant = () => {
                   </span>
                 </div>
               )}
+
+              {/* Show detected language */}
+              {detectedLanguage && voiceLanguage === 'auto' && (
+                <div className="language-detection">
+                  <span className="language-label">Detected:</span>
+                  <span className="language-text">{getLanguageName(detectedLanguage)}</span>
+                </div>
+              )}
               
               <div className="chat-input-wrapper">
                 <textarea
@@ -1055,16 +950,6 @@ const DocumentAssistant = () => {
                       disabled={isSearching || isTranscribing}
                     >
                       {isRecording ? <MicOff size={20} /> : <Mic size={20} />}
-                    </button>
-                  )}
-                  
-                  {isSpeaking && (
-                    <button
-                      onClick={stopSpeaking}
-                      className="stop-speech-button"
-                      title="Stop speaking"
-                    >
-                      <VolumeX size={20} />
                     </button>
                   )}
                 </div>
