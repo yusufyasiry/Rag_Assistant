@@ -60,6 +60,10 @@ app.add_middleware(
 def read_root():
     return{"This is":"root"}
 
+@app.get("/health")
+def health_check():
+    return {"status": "healthy"}
+
 @app.post("/chat/{conversation_id}")
 async def chat_with_conversation(conversation_id: str, request: MessageCreate):
     """
