@@ -1,0 +1,78 @@
+You are a wold class senior expert in ai and rag systems and you are helping me for a rag project.
+
+I am trying to create a vector database populated from various sources. The sources are both structured and unstructured. 
+They are from PDFs, Word docs, HTML help files, CSV, SQL DB (oracle), Unstructured support email logs or chat records.
+I need to create a pipeline with following specifications
+
+- Ingest from various sources specified above
+- Normalize and chunk the data for embeddings (semantic search)
+- Create metadata tags for filtering
+
+I dont know to what order should I follow while implementing the specifications above. The goal is to create
+knowledge base populated and indexed using a vector store. The tech stack that I want to use specified below
+This is just the part of creating the database remaining phases will come later.
+
+- Embedding Model: all-MiniLM-L6-v2
+- Vector DB: MongoDB atlas
+- Document Parsing: LangChain, Unstructured.io, or PDFMiner (Open to suggestions since there are various sources)
+- Data Labeling: Label Studio (Open to suggestions since there are various sources)
+
+There will be frontend and backend parts in the project so create the structure accordingly. 
+Also there will be Admin panel + retraining hooks.
+
+---------------------------------------------------------------------------------------------------------------------------
+
+You are a wold class senior expert in ai and rag systems and you are helping me for a rag project.
+
+I need to do a AI assistant web widget using advanced rag that can do following:
+
+- Understand and respond to customer questions related to leasing processes, L-Pack ERP functionalities, and troubleshooting issues.
+- Learn from structured and unstructured documentation (PDFs, support tickets, manuals, logs, emails).
+- Integrate into the company’s website or app as a chat widget and potentially scale to voice or email support.
+- Continuously improve through feedback and supervised fine-tuning.
+
+There will be frontend and backend part later but for now I am focusing on collect data from various sources like
+PDFs, Word docs, HTML help files, CSV, SQL DB (oracle), Unstructured support email logs or chat records. I need to be able to collect
+data from this sources and design a pipeline to ingest the following but I don't know which order should I process the data from docs
+to vector database:
+
+- Internal ERP documentation (PDFs, Word docs, HTML help files).
+- Structured customer support tickets (CSV, SQL DB).
+- Unstructured support email logs or chat records.
+- Leasing industry know-how (external knowledge sources like public leasing regulations or glossaries).
+- Normalize and chunk data for embedding (semantic search).
+- Create metadata tags (date, category, module, urgency, etc.) for filtering.
+
+I am planning to use the tech-stack below but you can make suggestions if there is a better choice:
+
+- Embedding Model: all-MiniLM-L6-v2
+- Vector DB: MongoDB atlas
+- Document Parsing: LangChain, Unstructured.io, or PDFMiner
+- Data Labeling: Label Studio
+- IDE: Cursor
+
+I need good instructions for this ingestion pipeline. Simplify the concepts as much as you can like I am a smart person but 
+don't know much about this topic.
+
+---------------------------------------------------------------------------------------------------------------------------
+
+You are a expert software engineer designing a ui web widget for an advanced rag project using react
+
+The project has following features:
+
+- Have an ingestion pipeline that can ingest:
+ * Internal ERP documentation (PDFs, Word docs, HTML help files).
+ * Structured customer support tickets (CSV, SQL DB).
+ * Unstructured support email logs or chat records.
+ * Leasing industry know-how (optional: external knowledge sources like public leasing regulations or glossaries).
+
+- Normalize and chunk data for embedding (semantic search).
+- Create metadata tags (date, category, module, urgency, etc.) for filtering.
+
+Build a simple front-end interface (chat window) that customers can access:
+
+- Web widget (React or plain HTML)
+- Ensure conversation logs are stored and searchable for feedback loops.
+
+
+
