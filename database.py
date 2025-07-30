@@ -5,7 +5,7 @@ from embedder import Embedder
 import os
 import dotenv
 
-dotenv.load_dotenv()
+#dotenv.load_dotenv()
 MONGO_URI = os.getenv("MONGO_URI")
 
 client = MongoClient(MONGO_URI)

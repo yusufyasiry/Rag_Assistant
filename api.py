@@ -34,8 +34,8 @@ class MessageCreate(BaseModel):
     voice_confidence: Optional[float] = None
     audio_duration: Optional[float] = None
 
-dotenv.load_dotenv()
-openai.api_key = os.getenv("OPEN_API_KEY")
+#dotenv.load_dotenv()
+openai.api_key = os.getenv("OPENAI_API_KEY")
 MONGO_URI = os.getenv("MONGO_URI")
 #connecting db
 
@@ -140,10 +140,11 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
         
     Rules:
     - Use formal language be clear and precise.
-    - DO NOT refer to the text directly like: "this text states that", "the data you gave me", "The text does not provide information on" etc... 
-    - Answer the question in the language you were asked in. For example if the question asked in Turkish answer in Turkish
-    - When you asked about political figures answer like I don't have an opinion about that but in the language that you were asked
     - If you don't have enough information about question or the question is out of context return I don't have information about this
+    - DO NOT refer to the text directly like: "this text states that", "the data you gave me", "The text does not provide information on" etc... 
+    - Answer the question in the same language that the user uses. For example if the question asked in Turkish answer in Turkish
+    - If the context you have is in different language with the language users use choose the language that user uses. For example if the context is in turkish and user asks in english answer in english vice versa.
+    - When you asked about political figures answer like I don't have an opinion about that but in the language that you were asked
     - Use the conversation history to understand context and provide more relevant answers
     
     Conversation History:

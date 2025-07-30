@@ -5,8 +5,8 @@ import os
 import dotenv
 import openai
 
-dotenv.load_dotenv()
-openai.api_key = os.getenv("OPEN_API_KEY")
+#dotenv.load_dotenv()
+openai.api_key = os.getenv("OPENAI_API_KEY")
 gpt = OpenAI()
 
 uri = os.getenv("MONGO_URI")

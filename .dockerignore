@@ -1,11 +1,11 @@
-# Secrets
-.env
 
 # Python
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
+.venv/
+venv/
 
 # OS files
 .DS_Store
@@ -25,3 +25,6 @@ Thumbs.db
 frontend/node_modules/
 frontend/build/
 frontend/dist/
+
+# IDEs
+.vscode/
