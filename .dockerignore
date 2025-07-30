@@ -1,0 +1,27 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+
+# Archives & temp
+*.zip
+*.tar
+*.bak
+*.log
+
+# Frontend build & deps
+frontend/node_modules/
+frontend/build/
+frontend/dist/

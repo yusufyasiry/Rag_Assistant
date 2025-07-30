@@ -1,4 +1,4 @@
-# Frontend Dockerfile
+# frontend/Dockerfile
 FROM node:18
 
 WORKDIR /app
@@ -8,8 +8,10 @@ RUN npm install
 
 COPY . .
 
-RUN npm run build
-RUN npm install -g serve
-
+# Expose dev server port
 EXPOSE 3000
-CMD ["serve", "-s", "build", "-l", "3000"]
+
+# Use polling for file changes
+ENV CHOKIDAR_USEPOLLING=true
+
+CMD ["npm", "start"]
