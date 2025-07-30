@@ -68,4 +68,4 @@ langchain*.cache/
 
 todo.txt
 .env
-.devcontainer/.env
+data/
