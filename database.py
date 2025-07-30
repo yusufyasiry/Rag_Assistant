@@ -2,9 +2,13 @@ from pymongo.mongo_client import MongoClient
 from pymongo.operations import SearchIndexModel
 from loaders import Loader
 from embedder import Embedder
+import os
+import dotenv
 
+dotenv.load_dotenv()
+MONGO_URI = os.getenv("MONGO_URI")
 
-client = MongoClient("mongodb+srv://admin:123456!@cluster0.fwq8r3i.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")
+client = MongoClient(MONGO_URI)
 db = client["support_assistant"]
 collection = db["embeddings"]
 messages = db["messages"]

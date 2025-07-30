@@ -5,9 +5,11 @@ import os
 import dotenv
 import openai
 
+dotenv.load_dotenv()
+openai.api_key = os.getenv("OPEN_API_KEY")
+gpt = OpenAI()
 
-
-uri = "mongodb+srv://admin:123456!@cluster0.fwq8r3i.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
+uri = os.getenv("MONGO_URI")
 client = MongoClient(uri)
 db = client["support_assistant"]
 collection = db["embeddings"]
@@ -34,9 +36,7 @@ relevant_chunks = [doc["content"] for doc in results]
 context = "\n\n".join(relevant_chunks)
 
 
-dotenv.load_dotenv()
-openai.api_key = os.getenv("OPEN_API_KEY")
-gpt = OpenAI()
+
 
 
 prompt = f"""You are an expert assistant who asnwer the questions based on the following rules. 
