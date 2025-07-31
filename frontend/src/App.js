@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Search, Clock, AlertCircle, FileText, Database, Plus, MessageCircle, Trash2, Mic, MicOff, Settings } from 'lucide-react';
+import { Search, Clock, AlertCircle, FileText, Database, Plus, MessageCircle, Trash2, Mic, MicOff, Settings, Volume2, VolumeX, Play, Pause } from 'lucide-react';
 import axios from 'axios';
 import './App.css';
 
@@ -27,13 +27,30 @@ const DocumentAssistant = () => {
   const [confidence, setConfidence] = useState(0);
   const [useWebSpeech, setUseWebSpeech] = useState(false);
 
+  // Text-to-Speech states
+  const [ttsSupported, setTtsSupported] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [speechQueue, setSpeechQueue] = useState([]);
+  const [currentSpeechId, setCurrentSpeechId] = useState(null);
+  const [ttsSettings, setTtsSettings] = useState({
+    enabled: true,
+    autoSpeak: false,
+    voice: null,
+    rate: 1.0,
+    pitch: 1.0,
+    volume: 0.8,
+    language: 'auto' // auto-detect from text or use specific language
+  });
+  const [availableVoices, setAvailableVoices] = useState([]);
+
   // Voice settings modal
   const [showVoiceSettings, setShowVoiceSettings] = useState(false);
 
-  // Refs for auto-scrolling
+  // Refs for auto-scrolling and TTS
   const messagesEndRef = useRef(null);
   const chatMessagesRef = useRef(null);
   const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
+  const speechSynthRef = useRef(null);
 
   // Speech recognition ref for Web Speech API fallback
   const recognitionRef = useRef(null);
@@ -42,9 +59,10 @@ const DocumentAssistant = () => {
   const API_BASE_URL = 'http://127.0.0.1:8000';
   const USER_ID = 'user123'; // In real app, get from auth
 
-  // Initialize voice capabilities
+  // Initialize voice capabilities including TTS
   useEffect(() => {
     initializeVoiceCapabilities();
+    initializeTextToSpeech();
     
     return () => {
       cleanup();
@@ -64,6 +82,63 @@ const DocumentAssistant = () => {
     }
   };
 
+  const initializeTextToSpeech = () => {
+    if ('speechSynthesis' in window) {
+      setTtsSupported(true);
+      speechSynthRef.current = window.speechSynthesis;
+      
+      // Load available voices
+      const loadVoices = () => {
+        const voices = speechSynthRef.current.getVoices();
+        setAvailableVoices(voices);
+        
+        // Set default voice (prefer English or user's language)
+        if (!ttsSettings.voice && voices.length > 0) {
+          const preferredVoice = voices.find(voice => 
+            voice.lang.startsWith('en') && voice.default
+          ) || voices.find(voice => 
+            voice.lang.startsWith('en')
+          ) || voices[0];
+          
+          setTtsSettings(prev => ({
+            ...prev,
+            voice: preferredVoice
+          }));
+        }
+      };
+
+      // Load voices immediately and on voiceschanged event
+      loadVoices();
+      speechSynthRef.current.addEventListener('voiceschanged', loadVoices);
+
+      // Handle speech events
+      const handleSpeechEnd = () => {
+        setIsSpeaking(false);
+        setCurrentSpeechId(null);
+        processSpeechQueue();
+      };
+
+      const handleSpeechError = (error) => {
+        console.error('Speech synthesis error:', error);
+        setIsSpeaking(false);
+        setCurrentSpeechId(null);
+        processSpeechQueue();
+      };
+
+      // Store event handlers for cleanup
+      speechSynthRef.current.addEventListener('end', handleSpeechEnd);
+      speechSynthRef.current.addEventListener('error', handleSpeechError);
+      
+      return () => {
+        if (speechSynthRef.current) {
+          speechSynthRef.current.removeEventListener('voiceschanged', loadVoices);
+          speechSynthRef.current.removeEventListener('end', handleSpeechEnd);
+          speechSynthRef.current.removeEventListener('error', handleSpeechError);
+        }
+      };
+    }
+  };
+
   const initializeWebSpeechAPI = () => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     recognitionRef.current = new SpeechRecognition();
@@ -76,6 +151,8 @@ const DocumentAssistant = () => {
     recognition.onstart = () => {
       setIsRecording(true);
       setError(null);
+      // Stop any ongoing speech when starting to record
+      stopSpeaking();
     };
 
     recognition.onresult = (event) => {
@@ -112,12 +189,149 @@ const DocumentAssistant = () => {
     };
   };
 
+  // Text-to-Speech Functions
+  const speakText = (text, messageId = null, options = {}) => {
+    if (!ttsSupported || !ttsSettings.enabled || !text.trim()) {
+      return;
+    }
+
+    // Stop current speech if any
+    if (isSpeaking) {
+      stopSpeaking();
+    }
+
+    const utterance = new SpeechSynthesisUtterance(text);
+    
+    // Apply settings
+    utterance.voice = options.voice || ttsSettings.voice;
+    utterance.rate = options.rate || ttsSettings.rate;
+    utterance.pitch = options.pitch || ttsSettings.pitch;
+    utterance.volume = options.volume || ttsSettings.volume;
+    
+    // Set language based on settings or detection
+    if (options.language) {
+      utterance.lang = options.language;
+    } else if (ttsSettings.language === 'auto') {
+      // Try to detect language from text or use voice language
+      utterance.lang = detectLanguageFromText(text) || (ttsSettings.voice?.lang) || 'en-US';
+    } else {
+      utterance.lang = ttsSettings.language;
+    }
+
+    // Event handlers
+    utterance.onstart = () => {
+      setIsSpeaking(true);
+      setCurrentSpeechId(messageId);
+    };
+
+    utterance.onend = () => {
+      setIsSpeaking(false);
+      setCurrentSpeechId(null);
+      processSpeechQueue();
+    };
+
+    utterance.onerror = (event) => {
+      console.error('Speech synthesis error:', event);
+      setIsSpeaking(false);
+      setCurrentSpeechId(null);
+      processSpeechQueue();
+    };
+
+    // Speak immediately
+    speechSynthRef.current.speak(utterance);
+  };
+
+  const stopSpeaking = () => {
+    if (speechSynthRef.current && isSpeaking) {
+      speechSynthRef.current.cancel();
+      setIsSpeaking(false);
+      setCurrentSpeechId(null);
+      setSpeechQueue([]);
+    }
+  };
+
+  const processSpeechQueue = () => {
+    if (speechQueue.length > 0 && !isSpeaking) {
+      const nextSpeech = speechQueue[0];
+      setSpeechQueue(prev => prev.slice(1));
+      speakText(nextSpeech.text, nextSpeech.messageId, nextSpeech.options);
+    }
+  };
+
+  const queueSpeech = (text, messageId = null, options = {}) => {
+    setSpeechQueue(prev => [...prev, { text, messageId, options }]);
+    if (!isSpeaking) {
+      processSpeechQueue();
+    }
+  };
+
+  const handleSpeakMessage = (message) => {
+    if (currentSpeechId === message.id) {
+      stopSpeaking();
+    } else {
+      speakText(message.content, message.id);
+    }
+  };
+
+  const detectLanguageFromText = (text) => {
+    // Simple language detection based on character patterns
+    // This is basic - for production, consider using a proper language detection library
+    
+    // Turkish detection
+    if (/[ğüşıöçĞÜŞİÖÇ]/.test(text)) {
+      return 'tr-TR';
+    }
+    
+    // German detection
+    if (/[äöüßÄÖÜ]/.test(text)) {
+      return 'de-DE';
+    }
+    
+    // French detection
+    if (/[àâäéèêëïîôùûüÿñç]/.test(text)) {
+      return 'fr-FR';
+    }
+    
+    // Spanish detection
+    if (/[ñáéíóúü¿¡]/.test(text)) {
+      return 'es-ES';
+    }
+    
+    // Default to English
+    return 'en-US';
+  };
+
+  const testVoice = () => {
+    const testText = "Hello! This is a test of the text-to-speech functionality. How does it sound?";
+    speakText(testText, 'test', ttsSettings);
+  };
+
   // Update recognition language when voice language changes
   useEffect(() => {
     if (recognitionRef.current) {
       recognitionRef.current.lang = `${voiceLanguage}-${voiceLanguage === 'en' ? 'US' : voiceLanguage === 'tr' ? 'TR' : 'US'}`;
     }
   }, [voiceLanguage]);
+
+  // Auto-speak new assistant messages if enabled
+  useEffect(() => {
+    if (ttsSettings.autoSpeak && messages.length > 0) {
+      const lastMessage = messages[messages.length - 1];
+      if (lastMessage.type === 'assistant' && !lastMessage.hasBeenSpoken) {
+        // Mark as spoken to avoid re-speaking
+        setMessages(prev => prev.map(msg => 
+          msg.id === lastMessage.id 
+            ? { ...msg, hasBeenSpoken: true }
+            : msg
+        ));
+        
+        // Speak the message
+        setTimeout(() => {
+          speakText(lastMessage.content, lastMessage.id);
+        }, 500); // Small delay to ensure UI is updated
+      }
+    }
+  }, [messages, ttsSettings.autoSpeak]);
 
   const cleanup = () => {
     if (mediaRecorder && mediaRecorder.state !== 'inactive') {
@@ -126,11 +340,17 @@ const DocumentAssistant = () => {
     if (recognitionRef.current) {
       recognitionRef.current.stop();
     }
+    if (speechSynthRef.current && isSpeaking) {
+      speechSynthRef.current.cancel();
+    }
   };
 
   // MediaRecorder-based voice recording (preferred method)
   const startRecording = async () => {
     try {
+      // Stop any ongoing speech
+      stopSpeaking();
+      
       const stream = await navigator.mediaDevices.getUserMedia({ 
         audio: {
           echoCancellation: true,
@@ -228,6 +448,7 @@ const DocumentAssistant = () => {
   const startWebSpeechRecording = () => {
     if (recognitionRef.current && webSpeechSupported) {
       try {
+        stopSpeaking(); // Stop any ongoing speech
         recognitionRef.current.start();
       } catch (error) {
         console.error('Error starting speech recognition:', error);
@@ -259,7 +480,7 @@ const DocumentAssistant = () => {
     }
   };
 
-  // Voice Commands
+  // Voice Commands (enhanced with TTS commands)
   const processVoiceCommand = (command) => {
     const lowerCommand = command.toLowerCase().trim();
     
@@ -277,6 +498,21 @@ const DocumentAssistant = () => {
     
     if (lowerCommand.includes('clear input') || lowerCommand.includes('clear text')) {
       setQuery('');
+      return true;
+    }
+    
+    if (lowerCommand.includes('stop speaking') || lowerCommand.includes('stop reading')) {
+      stopSpeaking();
+      return true;
+    }
+    
+    if (lowerCommand.includes('read last message') || lowerCommand.includes('repeat')) {
+      if (messages.length > 0) {
+        const lastMessage = messages[messages.length - 1];
+        if (lastMessage.type === 'assistant') {
+          speakText(lastMessage.content, lastMessage.id);
+        }
+      }
       return true;
     }
     
@@ -381,7 +617,8 @@ const DocumentAssistant = () => {
           snippet: chunk.length > 150 ? chunk.substring(0, 150) + "..." : chunk
         })) : [],
         timestamp: new Date(msg.timestamp),
-        voiceMetadata: msg.voice_metadata
+        voiceMetadata: msg.voice_metadata,
+        hasBeenSpoken: true // Mark existing messages as spoken to avoid auto-speaking on load
       }));
       
       setMessages(frontendMessages);
@@ -491,7 +728,8 @@ const DocumentAssistant = () => {
           name: `Source ${index + 1}`,
           snippet: chunk.length > 150 ? chunk.substring(0, 150) + "..." : chunk
         })),
-        timestamp: new Date()
+        timestamp: new Date(),
+        hasBeenSpoken: false // Mark as not spoken for auto-speak functionality
       };
       
       setMessages(prev => [...prev, assistantMessage]);
@@ -535,6 +773,7 @@ const DocumentAssistant = () => {
     setCurrentConversation(conversation);
     setError(null);
     setShouldAutoScroll(true);
+    stopSpeaking(); // Stop any ongoing speech when switching conversations
   };
 
   const handleKeyPress = (e) => {
@@ -564,64 +803,218 @@ const DocumentAssistant = () => {
     return languageNames[languageCode] || languageCode;
   };
 
-  // Voice Settings Modal Component
+  // Enhanced Voice Settings Modal Component
   const VoiceSettingsModal = () => (
     <div className="voice-settings-modal" style={{ display: showVoiceSettings ? 'flex' : 'none' }}>
       <div className="voice-settings-content">
         <div className="voice-settings-header">
-          <h3>Voice Input Settings</h3>
+          <h3>Voice Settings</h3>
           <button onClick={() => setShowVoiceSettings(false)} className="close-button">×</button>
         </div>
         
         <div className="voice-settings-body">
-          <div className="setting-group">
-            <label>Voice Input Method</label>
-            <select 
-              value={useWebSpeech ? 'webspeech' : 'whisper'} 
-              onChange={(e) => setUseWebSpeech(e.target.value === 'webspeech')}
-              className="setting-select"
-            >
-              <option value="whisper">Whisper API (Recommended)</option>
-              {webSpeechSupported && <option value="webspeech">Web Speech API (Fallback)</option>}
-            </select>
-            <small className="setting-help">
-              Whisper provides better accuracy and auto-detects language. Web Speech works offline in supported browsers.
-            </small>
+          {/* Voice Input Section */}
+          <div className="setting-section">
+            <h4>Voice Input</h4>
+            
+            <div className="setting-group">
+              <label>Voice Input Method</label>
+              <select 
+                value={useWebSpeech ? 'webspeech' : 'whisper'} 
+                onChange={(e) => setUseWebSpeech(e.target.value === 'webspeech')}
+                className="setting-select"
+              >
+                <option value="whisper">Whisper API (Recommended)</option>
+                {webSpeechSupported && <option value="webspeech">Web Speech API (Fallback)</option>}
+              </select>
+              <small className="setting-help">
+                Whisper provides better accuracy and auto-detects language. Web Speech works offline in supported browsers.
+              </small>
+            </div>
+
+            <div className="setting-group">
+              <label>Recognition Language</label>
+              <select 
+                value={voiceLanguage} 
+                onChange={(e) => setVoiceLanguage(e.target.value)}
+                className="setting-select"
+              >
+                <option value="auto">Auto-detect (Recommended)</option>
+                <option value="en">English</option>
+                <option value="tr">Türkçe</option>
+                <option value="de">Deutsch</option>
+                <option value="fr">Français</option>
+                <option value="es">Español</option>
+                <option value="it">Italiano</option>
+                <option value="pt">Português</option>
+                <option value="ru">Русский</option>
+                <option value="ja">日本語</option>
+                <option value="ko">한국어</option>
+                <option value="zh">中文</option>
+              </select>
+            </div>
           </div>
 
-          <div className="setting-group">
-            <label>Recognition Language</label>
-            <select 
-              value={voiceLanguage} 
-              onChange={(e) => setVoiceLanguage(e.target.value)}
-              className="setting-select"
-            >
-              <option value="auto">Auto-detect (Recommended)</option>
-              <option value="en">English</option>
-              <option value="tr">Türkçe</option>
-              <option value="de">Deutsch</option>
-              <option value="fr">Français</option>
-              <option value="es">Español</option>
-              <option value="it">Italiano</option>
-              <option value="pt">Português</option>
-              <option value="ru">Русский</option>
-              <option value="ja">日本語</option>
-              <option value="ko">한국어</option>
-              <option value="zh">中文</option>
-            </select>
-            <small className="setting-help">
-              Auto-detect lets Whisper automatically identify the language you're speaking. Manual selection can improve accuracy for specific languages.
-            </small>
-          </div>
+          {/* Text-to-Speech Section */}
+          {ttsSupported && (
+            <div className="setting-section">
+              <h4>Text-to-Speech</h4>
+              
+              <div className="setting-group">
+                <label className="checkbox-label">
+                  <input
+                    type="checkbox"
+                    checked={ttsSettings.enabled}
+                    onChange={(e) => setTtsSettings(prev => ({ ...prev, enabled: e.target.checked }))}
+                  />
+                  Enable Text-to-Speech
+                </label>
+              </div>
 
-          <div className="setting-group">
-            <h4 style={{ marginBottom: '10px', color: '#374151', fontSize: '14px' }}>Available Voice Commands:</h4>
-            <ul style={{ margin: 0, paddingLeft: '20px', fontSize: '13px', color: '#6b7280' }}>
-              <li>"New chat" - Start a new conversation</li>
-              <li>"Delete conversation" - Delete current chat</li>
-              <li>"Clear input" - Clear the input field</li>
-            </ul>
+              <div className="setting-group">
+                <label className="checkbox-label">
+                  <input
+                    type="checkbox"
+                    checked={ttsSettings.autoSpeak}
+                    onChange={(e) => setTtsSettings(prev => ({ ...prev, autoSpeak: e.target.checked }))}
+                    disabled={!ttsSettings.enabled}
+                  />
+                  Auto-speak assistant responses
+                </label>
+                <small className="setting-help">
+                  Automatically read out loud new assistant messages
+                </small>
+              </div>
+
+              <div className="setting-group">
+                <label>Voice Selection</label>
+                <select 
+                  value={ttsSettings.voice?.name || ''} 
+                  onChange={(e) => {
+                    const selectedVoice = availableVoices.find(voice => voice.name === e.target.value);
+                    setTtsSettings(prev => ({ ...prev, voice: selectedVoice }));
+                  }}
+                  className="setting-select"
+                  disabled={!ttsSettings.enabled}
+                >
+                  {availableVoices.map((voice, index) => (
+                    <option key={index} value={voice.name}>
+                      {voice.name} ({voice.lang}) {voice.default ? '(Default)' : ''}
+                    </option>
+                  ))}
+                </select>
+                <small className="setting-help">
+                  Choose the voice for text-to-speech output
+                </small>
+              </div>
+
+              <div className="setting-group">
+                <label>Speech Rate: {ttsSettings.rate.toFixed(1)}x</label>
+                <input
+                  type="range"
+                  min="0.5"
+                  max="2.0"
+                  step="0.1"
+                  value={ttsSettings.rate}
+                  onChange={(e) => setTtsSettings(prev => ({ ...prev, rate: parseFloat(e.target.value) }))}
+                  className="setting-slider"
+                  disabled={!ttsSettings.enabled}
+                />
+                <small className="setting-help">
+                  Control how fast the speech is delivered
+                </small>
+              </div>
+
+              <div className="setting-group">
+                <label>Speech Pitch: {ttsSettings.pitch.toFixed(1)}</label>
+                <input
+                  type="range"
+                  min="0.5"
+                  max="2.0"
+                  step="0.1"
+                  value={ttsSettings.pitch}
+                  onChange={(e) => setTtsSettings(prev => ({ ...prev, pitch: parseFloat(e.target.value) }))}
+                  className="setting-slider"
+                  disabled={!ttsSettings.enabled}
+                />
+                <small className="setting-help">
+                  Adjust the pitch of the voice
+                </small>
+              </div>
+
+              <div className="setting-group">
+                <label>Volume: {Math.round(ttsSettings.volume * 100)}%</label>
+                <input
+                  type="range"
+                  min="0.1"
+                  max="1.0"
+                  step="0.1"
+                  value={ttsSettings.volume}
+                  onChange={(e) => setTtsSettings(prev => ({ ...prev, volume: parseFloat(e.target.value) }))}
+                  className="setting-slider"
+                  disabled={!ttsSettings.enabled}
+                />
+                <small className="setting-help">
+                  Control the volume of speech output
+                </small>
+              </div>
+
+              <div className="setting-group">
+                <label>Speech Language</label>
+                <select 
+                  value={ttsSettings.language} 
+                  onChange={(e) => setTtsSettings(prev => ({ ...prev, language: e.target.value }))}
+                  className="setting-select"
+                  disabled={!ttsSettings.enabled}
+                >
+                  <option value="auto">Auto-detect from text</option>
+                  <option value="en-US">English (US)</option>
+                  <option value="en-GB">English (UK)</option>
+                  <option value="tr-TR">Türkçe</option>
+                  <option value="de-DE">Deutsch</option>
+                  <option value="fr-FR">Français</option>
+                  <option value="es-ES">Español</option>
+                  <option value="it-IT">Italiano</option>
+                  <option value="pt-PT">Português</option>
+                  <option value="ru-RU">Русский</option>
+                  <option value="ja-JP">日本語</option>
+                  <option value="ko-KR">한국어</option>
+                  <option value="zh-CN">中文</option>
+                </select>
+                <small className="setting-help">
+                  Choose language for speech synthesis or let it auto-detect
+                </small>
+              </div>
+            </div>
+          )}
+
+          {/* Voice Commands Section */}
+          <div className="setting-section">
+            <h4>Voice Commands</h4>
+            <div className="voice-commands-help">
+              <p><strong>Speech Recognition Commands:</strong></p>
+              <ul>
+                <li>"New chat" - Start a new conversation</li>
+                <li>"Delete conversation" - Delete current chat</li>
+                <li>"Clear input" - Clear the input field</li>
+                <li>"Stop speaking" - Stop current speech output</li>
+                <li>"Read last message" - Repeat the last assistant message</li>
+              </ul>
+            </div>
           </div>
+        </div>
+
+        <div className="voice-settings-footer">
+          {ttsSupported && (
+            <button 
+              onClick={testVoice} 
+              className="test-voice-button"
+              disabled={!ttsSettings.enabled}
+            >
+              {isSpeaking ? <VolumeX size={16} /> : <Volume2 size={16} />}
+              {isSpeaking ? 'Stop Test' : 'Test Voice'}
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -638,6 +1031,16 @@ const DocumentAssistant = () => {
             </div>
             <h1 className="title">Document Assistant</h1>
             <div className="header-controls">
+              {/* Global speech control */}
+              {ttsSupported && isSpeaking && (
+                <button 
+                  onClick={stopSpeaking}
+                  className="stop-speech-button"
+                  title="Stop Speaking"
+                >
+                  <VolumeX size={20} />
+                </button>
+              )}
               <button 
                 onClick={() => setShowVoiceSettings(true)}
                 className="voice-settings-button"
@@ -738,16 +1141,21 @@ const DocumentAssistant = () => {
                 </p>
               </div>
               <div className="chat-header-controls">
-                {(voiceSupported || webSpeechSupported) && (
-                  <div className="voice-status">
-                    {isRecording && (
-                      <span className="listening-indicator">
-                        <div className="pulse"></div>
-                        {isTranscribing ? 'Transcribing...' : 'Recording...'}
-                      </span>
-                    )}
-                  </div>
-                )}
+                {/* Voice status indicators */}
+                <div className="voice-status">
+                  {isSpeaking && (
+                    <span className="speaking-indicator">
+                      <Volume2 size={16} />
+                      Speaking...
+                    </span>
+                  )}
+                  {isRecording && (
+                    <span className="listening-indicator">
+                      <div className="pulse"></div>
+                      {isTranscribing ? 'Transcribing...' : 'Recording...'}
+                    </span>
+                  )}
+                </div>
                 {currentConversation && (
                   <button 
                     onClick={() => createNewConversation()} 
@@ -776,6 +1184,12 @@ const DocumentAssistant = () => {
                       Voice input is available! Click the microphone to start.
                     </p>
                   )}
+                  {ttsSupported && (
+                    <p className="voice-hint">
+                      <Volume2 size={16} />
+                      Text-to-speech enabled! Assistant responses can be read aloud.
+                    </p>
+                  )}
                   
                   <button 
                     onClick={() => createNewConversation()} 
@@ -792,13 +1206,24 @@ const DocumentAssistant = () => {
                   <p>Ask me anything about your documents. I'll search through them and provide you with accurate answers.</p>
                   
                   {/* Voice Commands Help */}
-                  {(voiceSupported || webSpeechSupported) && (
+                  {(voiceSupported || webSpeechSupported || ttsSupported) && (
                     <div className="voice-commands-help">
-                      <h4>Voice Commands:</h4>
+                      <h4>Voice Features Available:</h4>
                       <ul>
-                        <li>"New chat" - Start a new conversation</li>
-                        <li>"Delete conversation" - Delete current chat</li>
-                        <li>"Clear input" - Clear the input field</li>
+                        {(voiceSupported || webSpeechSupported) && (
+                          <>
+                            <li>🎤 Voice input - Click microphone to speak</li>
+                            <li>"New chat" - Start a new conversation</li>
+                            <li>"Clear input" - Clear the input field</li>
+                          </>
+                        )}
+                        {ttsSupported && (
+                          <>
+                            <li>🔊 Text-to-speech - Messages can be read aloud</li>
+                            <li>"Stop speaking" - Stop current speech</li>
+                            <li>"Read last message" - Repeat last response</li>
+                          </>
+                        )}
                       </ul>
                     </div>
                   )}
@@ -825,10 +1250,33 @@ const DocumentAssistant = () => {
                         <span className="message-sender">
                           {message.type === 'user' ? 'You' : message.type === 'error' ? 'Error' : 'Assistant'}
                         </span>
-                        <span className="message-time">{formatTime(message.timestamp)}</span>
+                        <div className="message-actions">
+                          {/* Speak button for assistant messages */}
+                          {message.type === 'assistant' && ttsSupported && ttsSettings.enabled && (
+                            <button
+                              onClick={() => handleSpeakMessage(message)}
+                              className="speak-message-button"
+                              title={currentSpeechId === message.id ? 'Stop speaking' : 'Read message aloud'}
+                            >
+                              {currentSpeechId === message.id ? (
+                                <VolumeX size={14} />
+                              ) : (
+                                <Volume2 size={14} />
+                              )}
+                            </button>
+                          )}
+                          <span className="message-time">{formatTime(message.timestamp)}</span>
+                        </div>
                       </div>
                       <div className="message-text">
                         {message.content}
+                        {/* Speaking indicator for current message */}
+                        {currentSpeechId === message.id && (
+                          <div className="speaking-indicator-inline">
+                            <Volume2 size={12} />
+                            <span>Speaking...</span>
+                          </div>
+                        )}
                       </div>
                       
                       {/* Show transcript confidence for user messages if they came from voice */}
@@ -942,6 +1390,18 @@ const DocumentAssistant = () => {
                 
                 {/* Voice Controls */}
                 <div className="voice-controls">
+                  {/* Global stop speaking button (when speaking and not recording) */}
+                  {ttsSupported && isSpeaking && !isRecording && (
+                    <button
+                      onClick={stopSpeaking}
+                      className="stop-speech-button"
+                      title="Stop speaking"
+                    >
+                      <VolumeX size={20} />
+                    </button>
+                  )}
+                  
+                  {/* Voice input button */}
                   {(voiceSupported || webSpeechSupported) && (
                     <button
                       onClick={toggleRecording}
