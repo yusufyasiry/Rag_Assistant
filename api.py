@@ -42,7 +42,7 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 MONGO_URI = os.getenv("MONGO_URI")
 #connecting db
 
-client = AsyncIOMotorClient(MONGO_URI)
+client = AsyncIOMotorClient(MONGO_URI, tls=True, tlsAllowInvalidCertificates=True)
 db = client["support_assistant"]
 collection = db["embeddings"]
 messages = db["messages"]
