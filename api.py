@@ -13,9 +13,6 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from typing import Dict, Optional, Union
 import tempfile
 from pathlib import Path
-from fastapi.responses import JSONResponse
-from fastapi.requests import Request
-
 
 
 class Question(BaseModel):
@@ -42,21 +39,7 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 MONGO_URI = os.getenv("MONGO_URI")
 #connecting db
 
-client = AsyncIOMotorClient(
-    MONGO_URI, 
-    tls=True, 
-    tlsAllowInvalidCertificates=True,
-    # Add these SSL parameters to fix the handshake issue:
-    ssl_cert_reqs=False,
-    ssl_match_hostname=False,
-    # Connection timeout settings
-    serverSelectionTimeoutMS=30000,
-    connectTimeoutMS=30000,
-    socketTimeoutMS=30000,
-    # Retry settings
-    retryWrites=True,
-    retryReads=True
-)
+client = AsyncIOMotorClient(MONGO_URI)
 db = client["support_assistant"]
 collection = db["embeddings"]
 messages = db["messages"]
@@ -67,62 +50,15 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://rag-assistant-front.onrender.com",  # Your frontend URL
-        "http://localhost:3000",  # For local development
-        "http://127.0.0.1:3000",  # Alternative localhost
-        "*"  # Temporary: allow all origins (remove in production)
-    ],
+    allow_origins=["http://localhost:3000"],  # Allow React app
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_methods=["*"],
     allow_headers=["*"],
 )
-
-@app.options("/{rest_of_path:path}")
-async def preflight_handler(request: Request, rest_of_path: str):
-    return JSONResponse(content={"message": "OK"})
-
 
 @app.get("/")
 def read_root():
     return{"This is":"root"}
-
-@app.get("/debug")
-async def debug_endpoint():
-    """Debug endpoint to test without database"""
-    import os
-    return {
-        "status": "ok",
-        "message": "Backend is running",
-        "environment": {
-            "mongo_uri_set": bool(os.getenv("MONGO_URI")),
-            "openai_key_set": bool(os.getenv("OPENAI_API_KEY")),
-        }
-    }
-
-@app.get("/test-db")
-async def test_database():
-    """Test database connection"""
-    try:
-        # Test database connection with timeout
-        result = await client.admin.command('ping')
-        
-        # Also test if we can access our specific database
-        db_stats = await db.command("dbStats")
-        
-        return {
-            "status": "success",
-            "message": "Database connection successful",
-            "ping_result": result,
-            "database_name": db.name,
-            "db_stats": db_stats
-        }
-    except Exception as e:
-        return {
-            "status": "error", 
-            "message": f"Database connection failed: {str(e)}",
-            "error_type": type(e).__name__
-        }
 
 @app.get("/health")
 def health_check():
