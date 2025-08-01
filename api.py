@@ -13,6 +13,9 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from typing import Dict, Optional, Union
 import tempfile
 from pathlib import Path
+from fastapi.responses import JSONResponse
+from fastapi.requests import Request
+
 
 
 class Question(BaseModel):
@@ -55,6 +58,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.options("/{rest_of_path:path}")
+async def preflight_handler(request: Request, rest_of_path: str):
+    return JSONResponse(content={"message": "OK"})
+
 
 @app.get("/")
 def read_root():
