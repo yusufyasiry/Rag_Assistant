@@ -50,11 +50,13 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],  # Allow React app
+    allow_origins=["http://localhost:3000", "https://rag-assistant-1-4zub.onrender.com"],  # Allow React app
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+port = int(os.getenv("PORT", 8000))
 
 @app.get("/")
 def read_root():
