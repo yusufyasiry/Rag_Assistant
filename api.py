@@ -42,7 +42,21 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 MONGO_URI = os.getenv("MONGO_URI")
 #connecting db
 
-client = AsyncIOMotorClient(MONGO_URI, tls=True, tlsAllowInvalidCertificates=True)
+client = AsyncIOMotorClient(
+    MONGO_URI, 
+    tls=True, 
+    tlsAllowInvalidCertificates=True,
+    # Add these SSL parameters to fix the handshake issue:
+    ssl_cert_reqs=False,
+    ssl_match_hostname=False,
+    # Connection timeout settings
+    serverSelectionTimeoutMS=30000,
+    connectTimeoutMS=30000,
+    socketTimeoutMS=30000,
+    # Retry settings
+    retryWrites=True,
+    retryReads=True
+)
 db = client["support_assistant"]
 collection = db["embeddings"]
 messages = db["messages"]
@@ -72,6 +86,43 @@ async def preflight_handler(request: Request, rest_of_path: str):
 @app.get("/")
 def read_root():
     return{"This is":"root"}
+
+@app.get("/debug")
+async def debug_endpoint():
+    """Debug endpoint to test without database"""
+    import os
+    return {
+        "status": "ok",
+        "message": "Backend is running",
+        "environment": {
+            "mongo_uri_set": bool(os.getenv("MONGO_URI")),
+            "openai_key_set": bool(os.getenv("OPENAI_API_KEY")),
+        }
+    }
+
+@app.get("/test-db")
+async def test_database():
+    """Test database connection"""
+    try:
+        # Test database connection with timeout
+        result = await client.admin.command('ping')
+        
+        # Also test if we can access our specific database
+        db_stats = await db.command("dbStats")
+        
+        return {
+            "status": "success",
+            "message": "Database connection successful",
+            "ping_result": result,
+            "database_name": db.name,
+            "db_stats": db_stats
+        }
+    except Exception as e:
+        return {
+            "status": "error", 
+            "message": f"Database connection failed: {str(e)}",
+            "error_type": type(e).__name__
+        }
 
 @app.get("/health")
 def health_check():
