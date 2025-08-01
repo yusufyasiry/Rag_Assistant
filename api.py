@@ -53,12 +53,16 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://rag-assistant-front.onrender.com"],  # Allow React app
+    allow_origins=[
+        "https://rag-assistant-front.onrender.com",  # Your frontend URL
+        "http://localhost:3000",  # For local development
+        "http://127.0.0.1:3000",  # Alternative localhost
+        "*"  # Temporary: allow all origins (remove in production)
+    ],
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
-
 
 @app.options("/{rest_of_path:path}")
 async def preflight_handler(request: Request, rest_of_path: str):
