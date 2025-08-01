@@ -47,10 +47,13 @@ conversations = db["conversations"]
 
 
 app = FastAPI()
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "https://rag-assistant-1-4zub.onrender.com"],  # Allow React app
+    allow_origins=[
+        "http://localhost:3000", 
+        "https://rag-assistant-1-4zub.onrender.com",
+        "https://*.onrender.com"
+    ],  # Allow React app
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
