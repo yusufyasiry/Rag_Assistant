@@ -128,7 +128,7 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
                 "$vectorSearch": {
                     "queryVector": embedded_query,
                     "path": "embedding",
-                    "numCandidates": 100,
+                    "numCandidates": 50,
                     "limit": 10,
                     "index": "vector_index"  
                 }
