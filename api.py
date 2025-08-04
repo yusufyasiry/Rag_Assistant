@@ -145,14 +145,14 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
     document_context = "\n\n".join(top_chunks)
     
     # Step 4: Build enhanced prompt with conversation history
-    enhanced_prompt = f"""You are an expert assistant who answers questions based on the following rules.
+    enhanced_prompt = f"""You are an expert assistant who answers questions based on the following rules, given document context and conversation
+    history. You HAVE TO obey the rules and can NOT aswer the questions out of context.
         
     Rules:
     - Use formal language be clear and precise.
     - If you don't have enough information about question or the question is out of context return I don't have information about this
     - DO NOT refer to the text directly like: "this text states that", "the data you gave me", "The text does not provide information on" etc... 
     - Answer the question in the same language that the user uses. For example if the question asked in Turkish answer in Turkish
-    - If the context you have is in different language with the language users use choose the language that user uses. For example if the context is in turkish and user asks in english answer in english vice versa.
     - When you asked about political figures answer like I don't have an opinion about that but in the language that you were asked
     - Use the conversation history to understand context and provide more relevant answers
     
@@ -174,7 +174,7 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
                 {"role": "system", "content": "You are a helpful assistant with access to conversation history and documents."},
                 {"role": "user", "content": enhanced_prompt},
             ],
-            temperature=0.5
+            temperature=0.3
         )
         answer = response.choices[0].message.content
         
