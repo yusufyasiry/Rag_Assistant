@@ -119,8 +119,8 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
         conversation_context += f"{role}: {msg['content']}\n"
     
     # Step 3: Get relevant documents 
-    multi_query = prompt.generate_multi_query(query)
-    embedded_query = embedder.embed(multi_query)[0]
+    # multi_query = prompt.generate_multi_query(query)
+    embedded_query = embedder.embed(query)[0]
     
     try:
         results = await collection.aggregate([
@@ -174,7 +174,7 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
                 {"role": "system", "content": "You are a helpful assistant with access to conversation history and documents."},
                 {"role": "user", "content": enhanced_prompt},
             ],
-            temperature=0.3
+            temperature=0.5
         )
         answer = response.choices[0].message.content
         
@@ -228,8 +228,8 @@ async def get_question(request: Question):
     prompt = Prompts()
     embedder = Embedder()
     query = request.question
-    multi_query = prompt.generate_multi_query(query)
-    embedded_query = embedder.embed(multi_query)[0]
+    # multi_query = prompt.generate_multi_query(query)
+    embedded_query = embedder.embed(query)[0]
     
     try:
         results = await collection.aggregate([
