@@ -56,7 +56,7 @@ class Loader:
         chunks = splitter.split_documents([doc])
         return chunks
 
-
+"""
 class OracleSQLLoader:
     def __init__(self, user, password, dsn, query, content_column, metadata_columns=[]):
         self.conn = oracledb.connect(user=user, password=password, dsn=dsn)
@@ -77,3 +77,4 @@ class OracleSQLLoader:
             results.append(Document(page_content=str(content), metadata=metadata))
 
         return results
+"""

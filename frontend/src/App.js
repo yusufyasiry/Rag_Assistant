@@ -1,13 +1,14 @@
+//Imports and Libraries
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Search, Clock, AlertCircle, FileText, Database, Plus, MessageCircle, Trash2, Mic, MicOff, Settings, Volume2, VolumeX, Play, Pause } from 'lucide-react';
-import axios from 'axios';
+import axios from 'axios'; // api call
 import './App.css';
 
 const DocumentAssistant = () => {
-  const [conversations, setConversations] = useState([]);
+  const [conversations, setConversations] = useState([]); // all convs
   const [currentConversation, setCurrentConversation] = useState(null);
-  const [messages, setMessages] = useState([]);
-  const [query, setQuery] = useState('');
+  const [messages, setMessages] = useState([]); // curent conv messages
+  const [query, setQuery] = useState(''); // user query
   const [isSearching, setIsSearching] = useState(false);
   const [error, setError] = useState(null);
   const [isLoadingConversations, setIsLoadingConversations] = useState(false);

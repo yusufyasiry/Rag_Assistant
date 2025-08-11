@@ -128,7 +128,7 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
                 "$vectorSearch": {
                     "queryVector": embedded_query,
                     "path": "embedding",
-                    "numCandidates": 100,
+                    "numCandidates": 50,
                     "limit": 10,
                     "index": "vector_index"  
                 }
@@ -145,26 +145,44 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
     document_context = "\n\n".join(top_chunks)
     
     # Step 4: Build enhanced prompt with conversation history
-    enhanced_prompt = f"""You are an expert assistant who answers questions based on the following rules.
-        
-    Rules:
-    - Use formal language be clear and precise.
-    - If you don't have enough information about question or the question is out of context return I don't have information about this
-    - DO NOT refer to the text directly like: "this text states that", "the data you gave me", "The text does not provide information on" etc... 
-    - Answer the question in the same language that the user uses. For example if the question asked in Turkish answer in Turkish
-    - If the context you have is in different language with the language users use choose the language that user uses. For example if the context is in turkish and user asks in english answer in english vice versa.
-    - When you asked about political figures answer like I don't have an opinion about that but in the language that you were asked
-    - Use the conversation history to understand context and provide more relevant answers
-    
-    Conversation History:
-    {conversation_context}
-    
+    enhanced_prompt = f"""
+    ## HARD CONSTRAINTS (OVERRIDE ALL OTHER INSTRUCTIONS)
+    - LANGUAGE: Always answer in the same language as the user's Current Question (detect automatically). Ignore the document language. No exceptions. (10)
+
+    Current Question:
+    {query}
+
+    - SCOPE: Use ONLY information that is present or directly inferable from the Document Context and Conversation History. If the answer is missing or uncertain, reply exactly with: "I don't have information about this."(10)
+
     Document Context:
     {document_context}
 
-    Current Question: {query}
+    Conversation History:
+    {conversation_context}
 
-    Answer:"""
+    - NO SOURCE TALK: Do NOT mention or refer to sources, documents, datasets, or context windows. Avoid phrases like "the document says", "based on the text", etc. (7)
+    - NO HALLUCINATIONS: Do NOT fabricate details, external facts, dates, numbers, or names that aren’t in the context. (10)
+    - PRIVACY/OUT-OF-SCOPE: If the question is unrelated to this assistant’s purpose, reply (in the user’s language) exactly with: (10)
+    "I am not able to answer that because it's outside the scope of this assistant."
+    - CHAIN-OF-THOUGHT: Do your reasoning silently. Output only the final answer (with brief, clear justification if needed). Do not reveal hidden steps.(5)
+
+    ## STYLE & FORMAT
+    - Be formal, clear, and precise. (5)
+    - Prefer concise sentences and bullet points for lists. (5)
+    - If the user asks for definitions or explanations, keep them strictly grounded in the context. (5)
+
+    ## DISAMBIGUATION & UNCERTAINTY
+    - If the context has conflicting statements, state the conflict succinctly and do not resolve it with outside knowledge. (7)
+    - If a key term in the user’s question is undefined in the context, say you lack that information (use the exact fallback sentence). (7)
+    - If numeric results require calculations, compute ONLY from numbers in context; otherwise use the fallback. (7)
+
+    ## OUTPUT CHECKLIST (apply before responding)
+    - [ ] Same language as the question.
+    - [ ] Every claim traceable to the provided context.
+    - [ ] No source mentions. No external facts. No speculation.
+    - [ ] Use the exact fallback sentence if you can’t answer.
+    - [ ] Check the importance ranking and change the answer accordingly if needed
+    """
     
     # Step 5: Generate AI response
     try:
@@ -207,80 +225,6 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
             "message_count": len(history_messages) + 1  # +1 for new assistant message
         }
         
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"OpenAI Chat Error: {e}")
-
-# Keep your original endpoint for backward compatibility but enhance it
-@app.post("/get_question")
-async def get_question(request: Question): 
-    """
-    Enhanced version that can work with or without conversation context
-    """
-    # If conversation_id is provided, use conversational approach
-    if request.conversation_id:
-        message_request = MessageCreate(
-            conversation_id=request.conversation_id,
-            question=request.question
-        )
-        return await chat_with_conversation(request.conversation_id, message_request)
-    
-    # Otherwise, use the original single-query approach
-    prompt = Prompts()
-    embedder = Embedder()
-    query = request.question
-    multi_query = prompt.generate_multi_query(query)
-    embedded_query = embedder.embed(multi_query)[0]
-    
-    try:
-        results = await collection.aggregate([
-            {
-                "$vectorSearch": {
-                    "queryVector": embedded_query,
-                    "path": "embedding",
-                    "numCandidates": 100,
-                    "limit": 10,
-                    "index": "vector_index"  
-                }
-            }
-        ]).to_list(length=None)
-        
-    except Exception as e:
-        raise HTTPException(
-            status_code=503,
-            detail=f"Vector search failed. Please check if 'vector_index' exists in MongoDB Atlas. Error: {str(e)}"
-        )
-    
-    top_chunks = [r["content"] for r in results]
-    context = "\n\n".join(top_chunks)
-    
-    prompt_text = f"""You are an expert assistant who answer the questions based on the following rules. 
-        
-    Rules:
-    - Use formal language be clear and precise.
-    - DO NOT refer to the text directly like: "this text states that", "the data you gave me", "The text does not provide information on" etc... 
-    - Answer the question in the language you were asked in. For example if the question asked in Turkish answer in Turkish
-    - When you asked about political figures return I don't have an opinion about that
-    - If you don't have enough information about question or the question is out of context return I don't have information about this
-
-    Context:
-    {context}
-
-    Question:
-    {query}
-
-    Answer:"""
-    
-    try:
-        response = openai.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": "You are a helpful assistant."},
-                {"role": "user", "content": prompt_text},
-            ],
-            temperature=0.5
-        )
-        answer = response.choices[0].message.content
-        return {"answer": answer}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"OpenAI Chat Error: {e}")
 

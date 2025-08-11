@@ -7,12 +7,11 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 
 class Prompts:
     
-    def __init__(self, model="gpt-4o") -> None:
+    def __init__(self, model="gpt-5-nano") -> None:
         self.model = model
     
     def generate_multi_query(self, original_query:str):
         prompt = f"""
-            You are a knowledgeable assistant. 
             For the given question, propose up to five related questions to assist them in finding the information they need. 
 
             Original question: {original_query}
@@ -27,10 +26,10 @@ class Prompts:
             response = openai.chat.completions.create(
                 model = self.model,
                 messages=[
-                    {"role":"system", "content": "You are a helpful assistant."},
+                    {"role":"system", "content": "You are a helpful assistant that very talented at generating similar queries from original query"},
                     {"role": "user", "content": prompt},
                 ],
-                temperature= 0.4
+                temperature= 0.5
             )
             
             content = response.choices[0].message.content
