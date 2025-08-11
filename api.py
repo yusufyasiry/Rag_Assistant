@@ -138,19 +138,19 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
     # Step 3: Build enhanced prompt with conversation history
     enhanced_prompt = f"""
     ## HARD CONSTRAINTS (OVERRIDE ALL OTHER INSTRUCTIONS)
+    - You must comply the importance rankings after the instructions in parentheses. They indicate how important is the instruction. The lowest rank is 1 which means not so important and the highest raiting is 10 which means most important and can not be ignored. (10)
     - LANGUAGE: Always answer in the same language as the user's Current Question (detect automatically). Ignore the document language. No exceptions. (10)
-
-    Current Question:
-    {query}
+    
+    Current Question -> {query}
+    
 
     - SCOPE: Use ONLY information that is present or directly inferable from the Document Context and Conversation History. If the answer is missing or uncertain, reply exactly with: "I don't have information about this."(10)
 
-    Document Context:
-    {document_context}
+    Document Context -> {document_context}
+    
 
-    Conversation History:
-    {conversation_context}
-
+    Conversation History -> {conversation_context}
+    
     - NO SOURCE TALK: Do NOT mention or refer to sources, documents, datasets, or context windows. Avoid phrases like "the document says", "based on the text", etc. (7)
     - NO HALLUCINATIONS: Do NOT fabricate details, external facts, dates, numbers, or names that aren’t in the context. (10)
     - PRIVACY/OUT-OF-SCOPE: If the question is unrelated to this assistant’s purpose, reply (in the user’s language) exactly with: (10)
@@ -180,7 +180,7 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
         response = openai.chat.completions.create(
             model="gpt-4o",
             messages=[
-                {"role": "system", "content": "You are a helpful assistant with access to conversation history and documents."},
+                {"role": "system", "content": "You are a helpful assistant in a RAG system with access to conversation history and documents."},
                 {"role": "user", "content": enhanced_prompt},
             ],
             temperature=0.5
@@ -438,3 +438,20 @@ async def transcribe_audio(
         # Cleanup temp file
         if os.path.exists(temp_file_path):
             os.unlink(temp_file_path)
+                      
+@app.get("/test-cost-calculation")
+def test_cost_calculation():
+    """Test endpoint to verify cost calculation is working"""
+    test_query = "What is the taxation process in leasing applications?"
+    
+    # Test the cost calculation
+    token_count = cost.calculate_token(test_query)
+    message_cost = cost.calculate_cost(test_query, "gpt-4o")
+    
+    return {
+        "message": "Cost calculation is working!",
+        "test_query": test_query,
+        "calculated_tokens": token_count,
+        "calculated_cost": message_cost,
+        "timestamp": datetime.now(timezone.utc)
+    }
