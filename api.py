@@ -195,9 +195,12 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
         "role": "user",
         "content": query,
         "timestamp": datetime.now(timezone.utc),
-        "token_count": len((answer or "").split()) * 1.3
+        "token_count": cost.calculate_token(enhanced_prompt),
+        "message_cost": cost.calculate_cost(enhanced_prompt,"gpt-4o")
         }
-    
+
+        print(f"User message - Token count: {user_message['token_count']}, Cost: {user_message['message_cost']}")
+        
         await db.messages.insert_one(user_message)
         
         # Step 6: Store assistant response
@@ -208,8 +211,11 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
             "content": answer,
             "sources": top_chunks,  # Store the source chunks
             "timestamp": datetime.now(timezone.utc),
-            "token_count": len((answer or "").split()) * 1.3
+            "token_count": cost.calculate_token(answer),
+            "message_cost": cost.calculate_cost(answer, "gpt-4o")
         }
+        
+        print(f"Assistant message - Token count: {assistant_message['token_count']}, Cost: {assistant_message['message_cost']}")
         
         await db.messages.insert_one(assistant_message)
         
