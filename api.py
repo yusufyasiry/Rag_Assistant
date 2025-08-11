@@ -140,6 +140,7 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
     ## HARD CONSTRAINTS (OVERRIDE ALL OTHER INSTRUCTIONS)
     - You must comply the importance rankings after the instructions in parentheses. They indicate how important is the instruction. The lowest rank is 1 which means not so important and the highest raiting is 10 which means most important and can not be ignored. (10)
     - LANGUAGE: Always answer in the same language as the user's Current Question (detect automatically). Ignore the document language. No exceptions. (10)
+    - Do not quote the document context directly first understand the document context then paraphrase it then translate it to same language with Current Question then return it as an answer (10)
     
     Current Question -> {query}
     
@@ -168,7 +169,7 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
     - If numeric results require calculations, compute ONLY from numbers in context; otherwise use the fallback. (7)
 
     ## OUTPUT CHECKLIST (apply before responding)
-    - [ ] Same language as the question.
+    - [ ] Same language as the Current question.
     - [ ] Every claim traceable to the provided context.
     - [ ] No source mentions. No external facts. No speculation.
     - [ ] Use the exact fallback sentence if you can’t answer.
