@@ -13,6 +13,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from typing import Dict, Optional, Union
 import tempfile
 from pathlib import Path
+from calculate_cost import CostProjection
 
 
 class Question(BaseModel):
@@ -37,8 +38,8 @@ class MessageCreate(BaseModel):
 #dotenv.load_dotenv()
 openai.api_key = os.getenv("OPENAI_API_KEY")
 MONGO_URI = os.getenv("MONGO_URI")
-#connecting db
 
+#connecting db
 client = AsyncIOMotorClient(MONGO_URI)
 db = client["support_assistant"]
 collection = db["embeddings"]
@@ -60,6 +61,8 @@ app.add_middleware(
 )
 
 port = int(os.getenv("PORT", 8000))
+cost = CostProjection()
+
 
 @app.get("/")
 def read_root():
@@ -88,19 +91,7 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
     
-    # Step 1: Store user message
-    user_message = {
-        "message_id": str(uuid.uuid4()),
-        "conversation_id": conversation_id,
-        "role": "user",
-        "content": query,
-        "timestamp": datetime.now(timezone.utc),
-        "token_count": len(query.split()) * 1.3  # Rough estimate
-    }
-    
-    await db.messages.insert_one(user_message)
-    
-    # Step 2: Get conversation history (last 10 messages for context)
+    # Step 1: Get conversation history (last x messages for context)
     history_cursor = db.messages.find(
         {"conversation_id": conversation_id}
     ).sort("timestamp", -1).limit(100)
@@ -118,7 +109,7 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
         role = "Human" if msg["role"] == "user" else "Assistant"
         conversation_context += f"{role}: {msg['content']}\n"
     
-    # Step 3: Get relevant documents 
+    # Step 2: Get relevant documents 
     multi_query = prompt.generate_multi_query(query)
     embedded_query = embedder.embed(multi_query)[0]
     
@@ -144,7 +135,7 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
     top_chunks = [r["content"] for r in results]
     document_context = "\n\n".join(top_chunks)
     
-    # Step 4: Build enhanced prompt with conversation history
+    # Step 3: Build enhanced prompt with conversation history
     enhanced_prompt = f"""
     ## HARD CONSTRAINTS (OVERRIDE ALL OTHER INSTRUCTIONS)
     - LANGUAGE: Always answer in the same language as the user's Current Question (detect automatically). Ignore the document language. No exceptions. (10)
@@ -184,7 +175,7 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
     - [ ] Check the importance ranking and change the answer accordingly if needed
     """
     
-    # Step 5: Generate AI response
+    # Step 4: Generate AI response
     try:
         response = openai.chat.completions.create(
             model="gpt-4o",
@@ -195,6 +186,19 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
             temperature=0.5
         )
         answer = response.choices[0].message.content
+        
+        
+        #Step 5: Store user message
+        user_message = {
+        "message_id": str(uuid.uuid4()),
+        "conversation_id": conversation_id,
+        "role": "user",
+        "content": query,
+        "timestamp": datetime.now(timezone.utc),
+        "token_count": len((answer or "").split()) * 1.3
+        }
+    
+        await db.messages.insert_one(user_message)
         
         # Step 6: Store assistant response
         assistant_message = {
@@ -227,39 +231,7 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"OpenAI Chat Error: {e}")
-
-# Optional: Add a simpler chat endpoint that auto-creates conversation
-@app.post("/chat")
-async def quick_chat(request: Question):
-    """
-    Simplified chat endpoint that auto-creates conversation if needed
-    """
-    USER_ID = "default_user"  # In real app, get from auth
-    
-    # Create new conversation for this chat
-    new_conversation = {
-        "conversation_id": str(uuid.uuid4()),
-        "user_id": USER_ID,
-        "title": request.question[:50] + "..." if len(request.question) > 50 else request.question,
-        "created_at": datetime.now(timezone.utc),
-        "updated_at": datetime.now(timezone.utc),
-        "message_count": 0,
-        "status": "active"
-    }
-    
-    await db.conversations.insert_one(new_conversation)
-    
-    # Use the conversational endpoint
-    message_request = MessageCreate(
-        conversation_id=new_conversation["conversation_id"],
-        question=request.question
-    )
-    
-    result = await chat_with_conversation(new_conversation["conversation_id"], message_request)
-    result["conversation"] = new_conversation  # Include conversation info
-    
-    return result
-    
+ 
 @app.post("/conversations")
 async def create_conversation(conversation: ConversationCreate):
     
@@ -319,7 +291,6 @@ async def update_conversation(conversation_id: str, updates: ConversationUpdate)
         raise HTTPException(status_code=404, detail="Conversation not found")
     
     updated_conv["_id"] = str(updated_conv["_id"])
-    
     return {"success": True, "conversation": updated_conv}
 
 @app.delete("/conversations/{conversation_id}")
@@ -346,7 +317,7 @@ async def delete_conversation(conversation_id: str):
         "success": True,
         "deleted_conversation": True,
         "deleted_messages": message_result.deleted_count
-    }
+        }
 
 @app.get("/conversations/{conversation_id}/messages")
 async def get_conversation_messages(
