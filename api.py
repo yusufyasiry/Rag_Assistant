@@ -143,7 +143,8 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
     - When you receive a question follow the following steps
         1) Translate the question in turkish
         2) Answer the question based on Document Context and Conversation History
-        3) Return the answer in the language same with the original question before you translated in turkish 
+        3) Return the answer in the language same with the original question
+        4) Don't return the question you were asked
     - Use only the provided Document Context and Conversation History. 
     - If missing, reply exactly: "I don't have information about this" in the same language as the question.
     - Do not mention sources or refer them like "Based on the resources provided".
