@@ -160,7 +160,7 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
         response = openai.chat.completions.create(
             model="gpt-4o",
             messages=messages,
-            temperature=1.0
+            temperature=0.5
         )
         answer = response.choices[0].message.content
         
