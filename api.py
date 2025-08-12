@@ -121,7 +121,7 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
                 "$vectorSearch": {
                     "queryVector": embedded_query,
                     "path": "embedding",
-                    "numCandidates": 50,
+                    "numCandidates": 100,
                     "limit": 10,
                     "index": "vector_index"  
                 }
@@ -142,7 +142,7 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
     - You are a expert financial assistant in a RAG system .
     - Always answer in the SAME LANGUAGE as the user's last message regardless of the documents language.
     - Use only the provided Document Context and Conversation History. 
-    - If missing, reply exactly: "I don't have information about this.
+    - If missing, reply exactly: "I don't have information about this" in the same language as the question.
     - Do not mention sources or refer them like "Based on the resources provided".
     - Do not answer the question out of the topic. The topic is Leasing and finance
     """

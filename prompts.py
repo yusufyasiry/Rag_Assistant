@@ -16,18 +16,18 @@ class Prompts:
 
             Original question: {original_query}
 
-            - Ensure the generated questions is in the same language with the original question. 
-                - For example if the original question is in Turkish generate the other questions in turkish too
-            - Provide concise, single-topic questions (without compounding sentences) that cover various aspects of the topic. 
+            - Ensure the generated questions are translated in turkish.
+            - Provide concise, single-topic questions (without compounding sentences) that cover various aspects of the topic.
             - Ensure each question is complete and directly related to the original inquiry. 
             - List each question on a separate line without numbering.
+            - Just return the questions only.
             """
         
         try:   
             response = openai.chat.completions.create(
                 model = self.model,
                 messages=[
-                    {"role":"system", "content": "You are a helpful assistant that very talented at generating similar queries from original query"},
+                    {"role":"system", "content": "You are a helpful assistant that very talented at generating similar queries from original while keeping the original meaning"},
                     {"role": "user", "content": prompt},
                 ],
                 temperature= 1.0
@@ -47,3 +47,8 @@ class Prompts:
             return [original_query] 
         
 
+if __name__ =="__main__":
+    prompt = Prompts()
+    
+    test = prompt.generate_multi_query("What is leasing")
+    print(test)
