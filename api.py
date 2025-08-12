@@ -213,7 +213,7 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
             "sources": top_chunks,  # Store the source chunks
             "timestamp": datetime.now(timezone.utc),
             "token_count": cost.calculate_token(answer),
-            "message_cost": cost.calculate_cost(answer, "gpt-4o")
+            "message_cost": cost.calculate_cost(answer, "gpt-5-mini")
         }
         
         print(f"Assistant message - Token count: {assistant_message['token_count']}, Cost: {assistant_message['message_cost']}")
