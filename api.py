@@ -159,7 +159,7 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
         response = openai.chat.completions.create(
             model="gpt-5-mini",
             messages=messages,
-            temperature=0.5
+            temperature=1.0
         )
         answer = response.choices[0].message.content
         
