@@ -139,11 +139,12 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
     
     # Step 3: Build enhanced prompt with conversation history
     rules = """
-    You are a RAG assistant.
-    Always answer in the SAME LANGUAGE as the user's last message regardless of the documents language.
-    Use only the provided Document Context and Conversation History. 
-    If missing, reply exactly: "I don't have information about this.
-    Do not mention sources."
+    - You are a expert financial assistant in a RAG system .
+    - Always answer in the SAME LANGUAGE as the user's last message regardless of the documents language.
+    - Use only the provided Document Context and Conversation History. 
+    - If missing, reply exactly: "I don't have information about this.
+    - Do not mention sources or refer them like "Based on the resources provided".
+    - Do not answer the question out of the topic. The topic is Leasing and finance
     """
     
     context_msg = f"Document Context:\n{document_context}\n\nConversation History:\n{conversation_context}"
@@ -157,7 +158,7 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
     # Step 4: Generate AI response
     try:
         response = openai.chat.completions.create(
-            model="gpt-5-mini",
+            model="gpt-4o",
             messages=messages,
             temperature=1.0
         )
@@ -172,7 +173,7 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
         "content": query,
         "timestamp": datetime.now(timezone.utc),
         "token_count": cost.calculate_token(rules),
-        "message_cost": cost.calculate_cost(rules,"gpt-5-mini")
+        "message_cost": cost.calculate_cost(rules,"gpt-4o")
         }
 
         #print(f"User message - Token count: {user_message['token_count']}, Cost: {user_message['message_cost']}")
@@ -188,7 +189,7 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
             "sources": top_chunks,  # Store the source chunks
             "timestamp": datetime.now(timezone.utc),
             "token_count": cost.calculate_token(answer),
-            "message_cost": cost.calculate_cost(answer, "gpt-5-mini")
+            "message_cost": cost.calculate_cost(answer, "gpt-4o")
         }
         
         #print(f"Assistant message - Token count: {assistant_message['token_count']}, Cost: {assistant_message['message_cost']}")
