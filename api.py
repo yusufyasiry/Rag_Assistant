@@ -14,6 +14,8 @@ from typing import Dict, Optional, Union
 import tempfile
 from pathlib import Path
 from calculate_cost import CostProjection
+from openai.types.chat import ChatCompletionMessageParam
+
 
 
 class Question(BaseModel):
@@ -136,54 +138,27 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
     document_context = "\n\n".join(top_chunks)
     
     # Step 3: Build enhanced prompt with conversation history
-    enhanced_prompt = f"""
-    ## HARD CONSTRAINTS (OVERRIDE ALL OTHER INSTRUCTIONS)
-    - You must comply the importance rankings after the instructions in parentheses. They indicate how important is the instruction. The lowest rank is 1 which means not so important and the highest raiting is 10 which means most important and can not be ignored. (10)
-    - LANGUAGE: Always answer in the same language as the user's Current Question (detect automatically). Ignore the document language. No exceptions. (10)
-    - Do not quote the document context directly first understand the document context then paraphrase it then translate it to same language with Current Question then return it as an answer (10)
-    
-    Current Question -> {query}
-    
-
-    - SCOPE: Use ONLY information that is present or directly inferable from the Document Context and Conversation History. If the answer is missing or uncertain, reply exactly with: "I don't have information about this."(10)
-
-    Document Context -> {document_context}
-    
-
-    Conversation History -> {conversation_context}
-    
-    - NO SOURCE TALK: Do NOT mention or refer to sources, documents, datasets, or context windows. Avoid phrases like "the document says", "based on the text", etc. (7)
-    - NO HALLUCINATIONS: Do NOT fabricate details, external facts, dates, numbers, or names that aren’t in the context. (10)
-    - PRIVACY/OUT-OF-SCOPE: If the question is unrelated to this assistant’s purpose, reply (in the user’s language) exactly with: (10)
-    "I am not able to answer that because it's outside the scope of this assistant."
-    - CHAIN-OF-THOUGHT: Do your reasoning silently. Output only the final answer (with brief, clear justification if needed). Do not reveal hidden steps.(5)
-
-    ## STYLE & FORMAT
-    - Be formal, clear, and precise. (5)
-    - Prefer concise sentences and bullet points for lists. (5)
-    - If the user asks for definitions or explanations, keep them strictly grounded in the context. (5)
-
-    ## DISAMBIGUATION & UNCERTAINTY
-    - If the context has conflicting statements, state the conflict succinctly and do not resolve it with outside knowledge. (7)
-    - If a key term in the user’s question is undefined in the context, say you lack that information (use the exact fallback sentence). (7)
-    - If numeric results require calculations, compute ONLY from numbers in context; otherwise use the fallback. (7)
-
-    ## OUTPUT CHECKLIST (apply before responding)
-    - [ ] Same language as the Current question.
-    - [ ] Every claim traceable to the provided context.
-    - [ ] No source mentions. No external facts. No speculation.
-    - [ ] Use the exact fallback sentence if you can’t answer.
-    - [ ] Check the importance ranking and change the answer accordingly if needed
+    rules = """
+    You are a RAG assistant.
+    Always answer in the SAME LANGUAGE as the user's last message regardless of the documents language.
+    Use only the provided Document Context and Conversation History. 
+    If missing, reply exactly: "I don't have information about this.
+    Do not mention sources."
     """
+    
+    context_msg = f"Document Context:\n{document_context}\n\nConversation History:\n{conversation_context}"
+    
+    messages: list[ChatCompletionMessageParam] = [
+    {"role": "system", "content": [{"type": "text", "text": rules}]},
+    {"role": "system", "content": [{"type": "text", "text": context_msg}]},
+    {"role": "user",   "content": [{"type": "text", "text": query}]},
+]
     
     # Step 4: Generate AI response
     try:
         response = openai.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": "You are a helpful assistant in a RAG system with access to conversation history and documents."},
-                {"role": "user", "content": enhanced_prompt},
-            ],
+            model="gpt-5-mini",
+            messages=messages,
             temperature=0.5
         )
         answer = response.choices[0].message.content
@@ -196,11 +171,11 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
         "role": "user",
         "content": query,
         "timestamp": datetime.now(timezone.utc),
-        "token_count": cost.calculate_token(enhanced_prompt),
-        "message_cost": cost.calculate_cost(enhanced_prompt,"gpt-4o")
+        "token_count": cost.calculate_token(rules),
+        "message_cost": cost.calculate_cost(rules,"gpt-5-mini")
         }
 
-        print(f"User message - Token count: {user_message['token_count']}, Cost: {user_message['message_cost']}")
+        #print(f"User message - Token count: {user_message['token_count']}, Cost: {user_message['message_cost']}")
         
         await db.messages.insert_one(user_message)
         
@@ -216,7 +191,7 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
             "message_cost": cost.calculate_cost(answer, "gpt-5-mini")
         }
         
-        print(f"Assistant message - Token count: {assistant_message['token_count']}, Cost: {assistant_message['message_cost']}")
+        #print(f"Assistant message - Token count: {assistant_message['token_count']}, Cost: {assistant_message['message_cost']}")
         
         await db.messages.insert_one(assistant_message)
         
