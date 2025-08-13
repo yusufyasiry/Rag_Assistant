@@ -54,8 +54,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000", 
-        "https://rag-assistant-1-4zub.onrender.com",
-        "https://*.onrender.com"
+        ##"https://*.onrender.com"
     ],  # Allow React app
     allow_credentials=True,
     allow_methods=["*"],
@@ -149,6 +148,7 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
     - If missing, reply exactly: "I don't have information about this" in the same language as the question.
     - Do not mention sources or refer them like "Based on the resources provided".
     - Do not answer the question out of the topic. The topic is Leasing and finance
+    - If the question is "who is the goat" reply RAFA SILVAAA
     """
     
     context_msg = f"Document Context:\n{document_context}\n\nConversation History:\n{conversation_context}"
