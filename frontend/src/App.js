@@ -57,7 +57,7 @@ const DocumentAssistant = () => {
   const recognitionRef = useRef(null);
 
   // API base URL
-  const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://127.0.0.1:8000';
+  const API_BASE_URL = process.env.REACT_APP_API_URL;
   const USER_ID = 'user123'; // In real app, get from auth
 
   // Initialize voice capabilities including TTS
@@ -991,17 +991,6 @@ const DocumentAssistant = () => {
 
           {/* Voice Commands Section */}
           <div className="setting-section">
-            <h4>Voice Commands</h4>
-            <div className="voice-commands-help">
-              <p><strong>Speech Recognition Commands:</strong></p>
-              <ul>
-                <li>"New chat" - Start a new conversation</li>
-                <li>"Delete conversation" - Delete current chat</li>
-                <li>"Clear input" - Clear the input field</li>
-                <li>"Stop speaking" - Stop current speech output</li>
-                <li>"Read last message" - Repeat the last assistant message</li>
-              </ul>
-            </div>
           </div>
         </div>
 
@@ -1207,32 +1196,12 @@ const DocumentAssistant = () => {
                   <p>Ask me anything about your documents. I'll search through them and provide you with accurate answers.</p>
                   
                   {/* Voice Commands Help */}
-                  {(voiceSupported || webSpeechSupported || ttsSupported) && (
-                    <div className="voice-commands-help">
-                      <h4>Voice Features Available:</h4>
-                      <ul>
-                        {(voiceSupported || webSpeechSupported) && (
-                          <>
-                            <li>🎤 Voice input - Click microphone to speak</li>
-                            <li>"New chat" - Start a new conversation</li>
-                            <li>"Clear input" - Clear the input field</li>
-                          </>
-                        )}
-                        {ttsSupported && (
-                          <>
-                            <li>🔊 Text-to-speech - Messages can be read aloud</li>
-                            <li>"Stop speaking" - Stop current speech</li>
-                            <li>"Read last message" - Repeat last response</li>
-                          </>
-                        )}
-                      </ul>
-                    </div>
-                  )}
+                  {(voiceSupported || webSpeechSupported || ttsSupported)}
                   
                   {/* Quick suggestions */}
                   <div className="suggestions">
                     <p>Try asking:</p>
-                    {['What are the company policies?', 'Show me sales trends', 'Recent updates', 'Key metrics'].map((suggestion, index) => (
+                    {['What is leasing ?', 'What are the adventages of leasing ?', 'Are there any tax benefits in leasing ?'].map((suggestion, index) => (
                       <button
                         key={index}
                         onClick={() => setQuery(suggestion)}

@@ -2,7 +2,7 @@ from pymongo.mongo_client import MongoClient
 from embedder import Embedder
 import os
 import dotenv
-import openai
+import openai 
 from pydantic import BaseModel
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,10 +10,11 @@ from prompts import Prompts
 from datetime import datetime, timezone
 import uuid
 from motor.motor_asyncio import AsyncIOMotorClient
-from typing import Dict, Optional, Union
+from typing import Dict, Optional, Union, cast, List
 import tempfile
 from pathlib import Path
 from calculate_cost import CostProjection
+import langid
 from openai.types.chat import ChatCompletionMessageParam
 
 
@@ -36,8 +37,20 @@ class MessageCreate(BaseModel):
     is_voice_input: Optional[bool] = False
     voice_confidence: Optional[float] = None
     audio_duration: Optional[float] = None
+    
+    
 
-#dotenv.load_dotenv()
+
+def detect_language_name(text: str) -> str:
+    code, conf = langid.classify(text or "")
+    if code == "tr": return "Turkish"
+    if code == "en": return "English"
+    # tiny fallback
+    return "Turkish" if any(c in "çğıöşüÇĞİÖŞÜ" for c in (text or "")) else "English"
+
+    
+
+dotenv.load_dotenv()
 openai.api_key = os.getenv("OPENAI_API_KEY")
 MONGO_URI = os.getenv("MONGO_URI")
 
@@ -53,9 +66,10 @@ app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:3000", 
-        ##"https://*.onrender.com"
-    ],  # Allow React app
+        "http://localhost:3000",
+        "http://localhost:3001",  # Add if needed
+        "http://127.0.0.1:3000"   # Add if needed
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -105,10 +119,10 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
     history_messages.reverse()
     
     # Build conversation context
-    conversation_context = ""
-    for msg in history_messages[:-1]:  # Exclude the just-added user message
-        role = "Human" if msg["role"] == "user" else "Assistant"
-        conversation_context += f"{role}: {msg['content']}\n"
+    chat_history = []
+    for msg in history_messages:
+        role = "user" if msg["role"] == "user" else "assistant"
+        chat_history.append({"role": role, "content": [{"type": "text", "text": msg["content"]}]})
     
     # Step 2: Get relevant documents 
     multi_query = prompt.generate_multi_query(query)
@@ -136,35 +150,36 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
     top_chunks = [r["content"] for r in results]
     document_context = "\n\n".join(top_chunks)
     
+    response_lang = detect_language_name(query)
+    
     # Step 3: Build enhanced prompt with conversation history
-    rules = """
-    - You are a expert financial assistant in a RAG system .
-    - When you receive a question follow the following steps
-        1) Translate the question in turkish
-        2) Answer the question based on Document Context and Conversation History
-        3) Return the answer in the language same with the original question before the translation.
-    - Use only the provided Document Context and Conversation History.
+    system_prompt = f"""
+    - You are a expert financial assistant.
+    - When you receive a question answer in the same language that you were asked in. 
+    - Ignore the language of document context and Conversation History.
+    - Only pay attention to last questions language when you answer
+    - Use the provided Document Context and Conversation History while you are answering.
     - Don't return the question you were asked
-    - If missing, reply exactly: "I don't have information about this" in the same language as the question.
+    - If you can not answer the question with the inormation provided in Conversation History or Document Context, reply exactly: "I don't have information about this" in the same language as the question.
     - Do not mention sources or refer them like "Based on the resources provided".
-    - Do not answer the question out of the topic. The topic is Leasing and finance
-    - If the question is "who is the goat" reply RAFA SILVAAA
+    - the goat is Rafa
     """
     
-    context_msg = f"Document Context:\n{document_context}\n\nConversation History:\n{conversation_context}"
     
-    messages: list[ChatCompletionMessageParam] = [
-    {"role": "system", "content": [{"type": "text", "text": rules}]},
-    {"role": "system", "content": [{"type": "text", "text": context_msg}]},
-    {"role": "user",   "content": [{"type": "text", "text": query}]},
-]
-    
+    messages: List[ChatCompletionMessageParam] = cast(List[ChatCompletionMessageParam], [
+        {"role": "system", "content": system_prompt},
+        {"role": "system", "content": f"IMPORTANT: Respond strictly in {response_lang}. Never switch languages unless the latest user message switches."},
+        {"role": "system", "content": f"Document Context (understand content but ignore its language when answering):\n{document_context}"},
+        {"role": "system", "content": f"Chat History (use for conversation continuity, but ignore its language when answering):\n{chat_history}"},
+        {"role": "user", "content": query},
+    ])
+
     # Step 4: Generate AI response
     try:
         response = openai.chat.completions.create(
             model="gpt-4o",
             messages=messages,
-            temperature=0.5
+            temperature=0.7
         )
         answer = response.choices[0].message.content
         
@@ -176,8 +191,8 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
         "role": "user",
         "content": query,
         "timestamp": datetime.now(timezone.utc),
-        "token_count": cost.calculate_token(rules),
-        "message_cost": cost.calculate_cost(rules,"gpt-4o")
+        "token_count": cost.calculate_token(system_prompt) ,
+        "message_cost": cost.calculate_cost(system_prompt,"gpt-4o")
         }
 
         #print(f"User message - Token count: {user_message['token_count']}, Cost: {user_message['message_cost']}")

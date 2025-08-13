@@ -42,16 +42,18 @@ body {
   flex-shrink: 0;
 }
 
+
 .header .container {
-  max-width: 1200px;
+  max-width: none;
   padding: 0 1rem;
+  margin: 0;
 }
 
 .header-content {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   width: 100%;
+  position: relative;
 }
 
 .logo {
@@ -62,20 +64,28 @@ body {
   height: 48px;
   background-color: rgba(255, 255, 255, 0.2);
   border-radius: 12px;
+  flex-shrink: 0;
+  margin-right: auto;
 }
 
 .title {
   font-size: 1.75rem;
   font-weight: 700;
   margin: 0;
-  flex: 1;
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
   text-align: center;
+  white-space: nowrap;
+  pointer-events: none;
 }
 
 .header-controls {
   display: flex;
   gap: 10px;
   align-items: center;
+  flex-shrink: 0;
+  margin-left: auto;
 }
 
 .voice-settings-button,
