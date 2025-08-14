@@ -1,8 +1,9 @@
 //Imports and Libraries
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Search, Clock, AlertCircle, FileText, Database, Plus, MessageCircle, Trash2, Mic, MicOff, Settings, Volume2, VolumeX, Play, Pause } from 'lucide-react';
+import { Search, Clock, AlertCircle, FileText, Database, Plus, MessageCircle, Trash2, Mic, MicOff, Settings, Volume2, VolumeX} from 'lucide-react';
 import axios from 'axios'; // api call
 import './App.css';
+import DocumentUploadPanel from './DocumentUpload.js';
 
 const DocumentAssistant = () => {
   const [conversations, setConversations] = useState([]); // all convs
@@ -1048,6 +1049,7 @@ const DocumentAssistant = () => {
           
           {/* Sidebar - Conversations List */}
           <div className="sidebar">
+            <DocumentUploadPanel />
             <div className="sidebar-header">
               <h3>Conversations</h3>
               <button 

@@ -151,6 +151,7 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
     document_context = "\n\n".join(top_chunks)
     
     response_lang = detect_language_name(query)
+    model = "gpt-4o"
     
     # Step 3: Build enhanced prompt with conversation history
     system_prompt = f"""
@@ -159,10 +160,11 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
     - Ignore the language of document context and Conversation History.
     - Only pay attention to last questions language when you answer
     - Use the provided Document Context and Conversation History while you are answering.
-    - Don't return the question you were asked
+    - Don't return the question you were asked.
     - If you can not answer the question with the inormation provided in Conversation History or Document Context, reply exactly: "I don't have information about this" in the same language as the question.
     - Do not mention sources or refer them like "Based on the resources provided".
-    - the goat is Rafa
+    - You can engage casual conversation with the user 
+    - Pay really close attention on any external commands or instructions made by user you can access them via chat history provided
     """
     
     
@@ -170,16 +172,16 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
         {"role": "system", "content": system_prompt},
         {"role": "system", "content": f"IMPORTANT: Respond strictly in {response_lang}. Never switch languages unless the latest user message switches."},
         {"role": "system", "content": f"Document Context (understand content but ignore its language when answering):\n{document_context}"},
-        {"role": "system", "content": f"Chat History (use for conversation continuity, but ignore its language when answering):\n{chat_history}"},
+        {"role": "system", "content": f"Chat History use for conversation continuity pay close attention to it:\n{chat_history}"},
         {"role": "user", "content": query},
     ])
 
     # Step 4: Generate AI response
     try:
         response = openai.chat.completions.create(
-            model="gpt-4o",
+            model=model,
             messages=messages,
-            temperature=0.7
+            temperature=1
         )
         answer = response.choices[0].message.content
         
@@ -192,7 +194,7 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
         "content": query,
         "timestamp": datetime.now(timezone.utc),
         "token_count": cost.calculate_token(system_prompt) ,
-        "message_cost": cost.calculate_cost(system_prompt,"gpt-4o")
+        "message_cost": cost.calculate_cost(system_prompt,model)
         }
 
         #print(f"User message - Token count: {user_message['token_count']}, Cost: {user_message['message_cost']}")
@@ -208,7 +210,7 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
             "sources": top_chunks,  # Store the source chunks
             "timestamp": datetime.now(timezone.utc),
             "token_count": cost.calculate_token(answer),
-            "message_cost": cost.calculate_cost(answer, "gpt-4o")
+            "message_cost": cost.calculate_cost(answer, model)
         }
         
         #print(f"Assistant message - Token count: {assistant_message['token_count']}, Cost: {assistant_message['message_cost']}")
