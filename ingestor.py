@@ -42,8 +42,10 @@ class Ingestor:
         
         # Process file based on extension
         try:
-            if ext in [".pdf", ".txt"]:
+            if ext == ".pdf":
                 docs = self.loader.load_pdf(file_path)
+            elif ext == ".txt":
+                docs = self.loader.load_txt(file_path)
             elif ext == ".csv":
                 docs = self.loader.load_csv(file_path)
             elif ext in [".html", ".htm"]:

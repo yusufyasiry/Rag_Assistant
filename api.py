@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from prompts import Prompts
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import uuid
 from motor.motor_asyncio import AsyncIOMotorClient
 from typing import Dict, Optional, Union, cast, List
@@ -16,6 +16,9 @@ from pathlib import Path
 from calculate_cost import CostProjection
 import langid
 from openai.types.chat import ChatCompletionMessageParam
+import shutil
+from ingestor import Ingestor
+import asyncio
 
 
 
@@ -38,7 +41,19 @@ class MessageCreate(BaseModel):
     voice_confidence: Optional[float] = None
     audio_duration: Optional[float] = None
     
-    
+class DocumentUpload(BaseModel):
+    filename:str
+    file_size:int
+
+class DocumentResponse:
+    document_id = str
+    filename:str
+    file_size:int 
+    status:str
+    chunks_count: Optional[int] = None
+    uploaded_at: datetime
+    processed_at: Optional[datetime] = None
+    error_message: Optional[str] = None
 
 
 def detect_language_name(text: str) -> str:
@@ -48,7 +63,194 @@ def detect_language_name(text: str) -> str:
     # tiny fallback
     return "Turkish" if any(c in "çğıöşüÇĞİÖŞÜ" for c in (text or "")) else "English"
 
+
+async def perform_final_verification(document_id: str) -> bool:
+    """
+    Perform a comprehensive final verification using actual query patterns
+    """
+    try:
+        # Get a representative chunk from the document
+        sample_chunk = await db.embeddings.find_one({"document_id": document_id})
+        if not sample_chunk:
+            return False
+        
+        # Create a realistic query from the content
+        content = sample_chunk["content"]
+        
+        # Generate a query similar to how the system would actually be used
+        words = content.split()[:10]  # First 10 words
+        test_query = " ".join(words)
+        
+        if len(test_query.strip()) < 10:  # Ensure we have enough content
+            return False
+        
+        # Use the actual embedder and search process
+        embedder = Embedder()
+        embedded_query = embedder.embed([test_query])[0]
+        
+        # Perform the same type of search that the chat endpoint uses
+        results = await db.embeddings.aggregate([
+            {
+                "$vectorSearch": {
+                    "queryVector": embedded_query,
+                    "path": "embedding",
+                    "numCandidates": 100,
+                    "limit": 10,
+                    "index": "vector_index"
+                }
+            }
+        ]).to_list(length=None)
+        
+        # Check if our document appears in the top results
+        for result in results[:5]:  # Check top 5 results
+            if result.get("document_id") == document_id:
+                print(f"Final verification successful for document {document_id}")
+                return True
+        
+        print(f"Final verification failed for document {document_id} - document not in top search results")
+        return False
+        
+    except Exception as e:
+        print(f"Final verification error for document {document_id}: {e}")
+        return False
+
+async def verify_document_searchable(document_id: str, max_retries: int = 30, delay: float = 3.0) -> bool:
+    """
+    Verify that a document's embeddings are searchable in the vector index
+    Enhanced with proper retry logic and index readiness checks
+    """
+    embedder = Embedder()
     
+    # Get multiple sample chunks from this document to test search thoroughly
+    sample_chunks = await db.embeddings.find({"document_id": document_id}).limit(3).to_list(length=None)
+    if not sample_chunks:
+        print(f"No chunks found for document {document_id}")
+        return False
+    
+    print(f"Starting verification for document {document_id} with {len(sample_chunks)} test chunks")
+    
+    for attempt in range(max_retries):
+        try:
+            found_chunks = 0
+            
+            # Test multiple chunks to ensure comprehensive searchability
+            for i, sample_chunk in enumerate(sample_chunks):
+                # Create a test query using the sample content (first 150 chars for better matching)
+                test_text = sample_chunk["content"][:150].strip()
+                if not test_text:
+                    continue
+                    
+                test_embedding = embedder.embed([test_text])[0]
+                
+                # Try to search for this document's chunks
+                results = await db.embeddings.aggregate([
+                    {
+                        "$vectorSearch": {
+                            "queryVector": test_embedding,
+                            "path": "embedding",
+                            "numCandidates": 100,
+                            "limit": 20,
+                            "index": "vector_index"
+                        }
+                    }
+                ]).to_list(length=None)
+                
+                # Check if any results belong to our document
+                for result in results:
+                    if result.get("document_id") == document_id:
+                        found_chunks += 1
+                        print(f"Found chunk {i+1} for document {document_id} in search results")
+                        break
+            
+            # Consider successful if we found at least 2 out of 3 chunks (or all available chunks)
+            success_threshold = min(2, len(sample_chunks))
+            if found_chunks >= success_threshold:
+                print(f"Document {document_id} verification successful: {found_chunks}/{len(sample_chunks)} chunks found")
+                return True
+            
+            print(f"Verification attempt {attempt + 1}/{max_retries}: Found {found_chunks}/{len(sample_chunks)} chunks for document {document_id}")
+            
+            # Progressive delay - start with shorter delays, increase over time
+            current_delay = delay + (attempt * 0.5)  # Increase delay each attempt
+            await asyncio.sleep(current_delay)
+            
+        except Exception as e:
+            print(f"Search verification attempt {attempt + 1} failed for document {document_id}: {e}")
+            await asyncio.sleep(delay)
+    
+    print(f"Document {document_id} failed verification after {max_retries} attempts")
+    return False
+
+async def background_index_verification(document_id: str):
+    """
+    Enhanced background task to verify document is searchable and update status
+    """
+    try:
+        print(f"Starting background verification for document {document_id}")
+        
+        # Initial delay to allow for basic indexing to start
+        await asyncio.sleep(5.0)
+        
+        # Wait for index to be ready with enhanced verification
+        is_searchable = await verify_document_searchable(
+            document_id, 
+            max_retries=30,  # Up to 2.5 minutes of checking
+            delay=3.0
+        )
+        
+        if is_searchable:
+            # Final verification: do one more comprehensive search test
+            final_verification = await perform_final_verification(document_id)
+            
+            if final_verification:
+                # Update status to ready
+                await db.documents.update_one(
+                    {"document_id": document_id},
+                    {
+                        "$set": {
+                            "status": "ready",
+                            "processed_at": datetime.now(timezone.utc)
+                        }
+                    }
+                )
+                print(f"Document {document_id} is now fully searchable and ready!")
+            else:
+                # Failed final verification
+                await db.documents.update_one(
+                    {"document_id": document_id},
+                    {
+                        "$set": {
+                            "status": "error",
+                            "error_message": "Document indexed but failed final verification - please retry"
+                        }
+                    }
+                )
+                print(f"Document {document_id} failed final verification")
+        else:
+            # Mark as error if verification failed
+            await db.documents.update_one(
+                {"document_id": document_id},
+                {
+                    "$set": {
+                        "status": "error",
+                        "error_message": "Document indexed but not searchable after maximum retries - please retry upload"
+                    }
+                }
+            )
+            print(f"Document {document_id} failed search verification")
+            
+    except Exception as e:
+        # Handle verification errors
+        await db.documents.update_one(
+            {"document_id": document_id},
+            {
+                "$set": {
+                    "status": "error",
+                    "error_message": f"Index verification failed: {str(e)}"
+                }
+            }
+        )
+        print(f"Error verifying document {document_id}: {e}")  
 
 dotenv.load_dotenv()
 openai.api_key = os.getenv("OPENAI_API_KEY")
@@ -60,6 +262,7 @@ db = client["support_assistant"]
 collection = db["embeddings"]
 messages = db["messages"]
 conversations = db["conversations"]
+documents = db["documents"]
 
 
 app = FastAPI()
@@ -78,6 +281,7 @@ app.add_middleware(
 port = int(os.getenv("PORT", 8000))
 cost = CostProjection()
 
+USER_ID = 'user123'
 
 @app.get("/")
 def read_root():
@@ -181,7 +385,7 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
         response = openai.chat.completions.create(
             model=model,
             messages=messages,
-            temperature=1
+            temperature=0.4
         )
         answer = response.choices[0].message.content
         
@@ -321,7 +525,7 @@ async def delete_conversation(conversation_id: str):
         "success": True,
         "deleted_conversation": True,
         "deleted_messages": message_result.deleted_count
-        }
+    }
 
 @app.get("/conversations/{conversation_id}/messages")
 async def get_conversation_messages(
@@ -452,4 +656,238 @@ def test_cost_calculation():
         "calculated_tokens": token_count,
         "calculated_cost": message_cost,
         "timestamp": datetime.now(timezone.utc)
+    }
+    
+@app.post("/upload-document")
+async def upload_document(file: UploadFile = File(...)):
+    """
+    Upload and process the data
+    """
+    
+    # Validata data
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No filename provided")
+    
+    # Check extension
+    allowed_extensions =  ['.pdf', '.txt', '.csv', '.html', '.htm', '.docx']
+    file_ext = os.path.splitext(file.filename)[1].lower()
+    if file_ext not in allowed_extensions:
+        raise HTTPException(status_code=400, detail=f"Unsupported file type. Allowed: {allowed_extensions}")
+    
+    # Create document record
+    document_id = str(uuid.uuid4())
+    document_record = {
+        "document_id": document_id,
+        "filename": file.filename,
+        "file_size": file.size,
+        "status": "processing",
+        "uploaded_at": datetime.now(timezone.utc),
+        "user_id": USER_ID
+    }
+    
+    await db.documents.insert_one(document_record)
+    
+    # save file temporarily
+    data_folder = "./data"
+    os.makedirs(data_folder, exist_ok=True)
+    temp_file_path = os.path.join(data_folder, f"{document_id}_{file.filename}")
+    
+    try:
+        # save uploaded file
+        with open(temp_file_path, "wb") as buffer:
+            content = await file.read()
+            buffer.write(content)
+        
+        # process the file
+        ingestor = Ingestor(data_folder)
+        documents_chunks = ingestor.ingest_single_file(temp_file_path)
+        
+        # create embeddings
+        embedder = Embedder()
+        texts = [doc.page_content for doc in documents_chunks]
+        embeddings = embedder.embed(texts)
+        
+        # save chunks to embeddings collection
+        chunks_inserted = 0
+        for doc_chunk, embedding in zip(documents_chunks, embeddings):
+            chunk_record = {
+                "document_id": document_id,  # Link to source document
+                "content": doc_chunk.page_content,
+                "embedding": embedding,
+                "metadata": doc_chunk.metadata
+            }
+            await db.embeddings.insert_one(chunk_record)
+            chunks_inserted += 1
+            
+        await db.documents.update_one(
+            {"document_id": document_id},
+            {
+                "$set": {
+                    "status": "processing_index",
+                    "chunks_count": chunks_inserted,
+                    "processed_at": datetime.now(timezone.utc)
+                }
+            }
+        )
+        
+        # cleanup tempfile
+        os.unlink(temp_file_path)
+        
+        # response
+        response_data = {
+            "success": True,
+            "document_id": document_id,
+            "filename": file.filename,
+            "chunks_created": chunks_inserted,
+            "status": "processing_index"
+        }
+        
+        # background verification
+        asyncio.create_task(background_index_verification(document_id))
+        
+        return response_data
+        
+    except Exception as e:
+        # Cleanup on error
+        if os.path.exists(temp_file_path):
+            os.unlink(temp_file_path)
+        
+        # update document status to error
+        await db.documents.update_one(
+            {"document_id": document_id},
+            {"$set": {"status": "error", "error_message": str(e)}}
+        )
+        
+        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
+
+@app.get("/documents")
+async def get_documents(skip: int = 0, limit:int = 20):
+    """
+    Get list of uploaded documents for the user
+    """
+    
+    cursor = db.documents.find(
+        {"user_id":USER_ID}
+    ).sort("uploaded_at",-1).skip(skip).limit(limit)
+    
+    documents = []
+    async for doc in cursor:
+        doc["_id"] = str(doc["_id"])
+        documents.append(doc)
+        
+    total_count = await db.documents.count_documents({"user_id": USER_ID})
+
+    return {
+        "documents": documents,
+        "total": total_count,
+        "skip": skip,
+        "limit": limit
+    }
+
+@app.delete("/documents/{document_id}")
+async def delete_document(document_id:str):
+    """
+    Delete a document and all chunks of it
+    """
+    
+    document = await db.documents.find_one({
+        "document_id": document_id, 
+        "user_id": USER_ID
+    })
+    
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    # ensure both deletion succeed or both fail
+    async with await client.start_session() as session:
+        async with session.start_transaction():
+            # Delete all chunks from embeddings
+            chunks_result = await db.embeddings.delete_many(
+                {"document_id":document_id},
+                session= session
+            )
+            
+        # delete document record
+        doc_result = await db.documents.delete_one(
+            {"document_id":document_id},
+            session=session
+        )
+
+    return {
+        "success": True,
+        "deleted_document": True,
+        "deleted_chunks": chunks_result.deleted_count,
+        "filename": document["filename"]
+    }
+
+@app.get("/documents/{document_id}/status")
+async def get_document_status(document_id: str):
+    """
+    Get real-time status of a specific document
+    """
+    document = await db.documents.find_one({
+        "document_id": document_id,
+        "user_id": USER_ID
+    })
+    
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    # Remove MongoDB ObjectId for JSON serialization
+    document["_id"] = str(document["_id"])
+    
+    # Add additional status information
+    status_info = {
+        "document_id": document_id,
+        "filename": document["filename"],
+        "status": document["status"],
+        "uploaded_at": document["uploaded_at"],
+        "processed_at": document.get("processed_at"),
+        "chunks_count": document.get("chunks_count", 0),
+        "error_message": document.get("error_message"),
+        "file_size": document["file_size"]
+    }
+    
+    # If still processing, check how many chunks are already indexed
+    if document["status"] in ["processing", "processing_index"]:
+        chunk_count = await db.embeddings.count_documents({"document_id": document_id})
+        status_info["current_chunks"] = chunk_count
+        
+        # Estimate progress if we know expected chunks
+        if document.get("chunks_count"):
+            status_info["progress_percentage"] = min(100, (chunk_count / document["chunks_count"]) * 100)
+    
+    return status_info  
+
+@app.get("/documents/status/summary")
+async def get_documents_status_summary():
+    """
+    Get summary of all document statuses for the user
+    """
+    pipeline = [
+        {"$match": {"user_id": USER_ID}},
+        {"$group": {
+            "_id": "$status",
+            "count": {"$sum": 1}
+        }}
+    ]
+    
+    status_counts = {}
+    async for result in db.documents.aggregate(pipeline):
+        status_counts[result["_id"]] = result["count"]
+    
+    # Get recent processing documents
+    recent_processing = await db.documents.find({
+        "user_id": USER_ID,
+        "status": {"$in": ["processing", "processing_index"]},
+        "uploaded_at": {"$gte": datetime.now(timezone.utc) - timedelta(hours=1)}
+    }).sort("uploaded_at", -1).limit(5).to_list(length=None)
+    
+    for doc in recent_processing:
+        doc["_id"] = str(doc["_id"])
+    
+    return {
+        "status_summary": status_counts,
+        "recent_processing": recent_processing,
+        "total_documents": sum(status_counts.values())
     }
