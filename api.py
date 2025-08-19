@@ -493,7 +493,7 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
     # Step 1: Get conversation history (last x messages for context)
     history_cursor = db.messages.find(
         {"conversation_id": conversation_id}
-    ).sort("timestamp", -1).limit(100)
+    ).sort("timestamp", -1).limit(10)
     
     history_messages = []
     async for msg in history_cursor:
@@ -507,6 +507,9 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
     for msg in history_messages:
         role = "user" if msg["role"] == "user" else "assistant"
         chat_history.append({"role": role, "content": [{"type": "text", "text": msg["content"]}]})
+    
+    conversation_context = prompt.extract_conversation_context(chat_history=chat_history)
+    print(f"CONTEXT-> {conversation_context}")
     
     # Step 2: Get relevant documents 
     multi_query = prompt.generate_multi_query(query)
@@ -556,11 +559,11 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
         {"role": "system", "content": system_prompt},
         {"role": "system", "content": f"IMPORTANT: Respond strictly in {response_lang}. Never switch languages unless the latest user message switches."},
         {"role": "system", "content": f"Document Context (understand content but ignore its language when answering):\n{document_context}"},
-        {"role": "system", "content": f"Chat History use for conversation continuity pay close attention to it:\n{chat_history}"},
+        {"role": "system", "content": f"Conversation Context: use for conversation continuity pay close attention to it:\n{conversation_context}"},
         {"role": "user", "content": query},
     ])
 
-    # Step 4: Generate AI response
+    # Step 4: Generate AI response  
     try:
         response = openai_client.chat.completions.create(
             model=text_model,
