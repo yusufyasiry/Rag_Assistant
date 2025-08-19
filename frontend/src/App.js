@@ -1,6 +1,6 @@
 //Imports and Libraries
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Search, Clock, AlertCircle, FileText, Database, Plus, MessageCircle, Trash2, Mic, MicOff, Settings, Volume2, VolumeX} from 'lucide-react';
+import { Search, Clock, AlertCircle, FileText, Database, Plus, MessageCircle, Trash2, Mic, MicOff, Settings, Volume2, VolumeX, Loader2} from 'lucide-react';
 import axios from 'axios'; // api call
 import './App.css';
 import DocumentUploadPanel from './DocumentUpload.js';
@@ -29,42 +29,46 @@ const DocumentAssistant = () => {
   const [confidence, setConfidence] = useState(0);
   const [useWebSpeech, setUseWebSpeech] = useState(false);
 
-  // Text-to-Speech states
-  const [ttsSupported, setTtsSupported] = useState(false);
+  // Enhanced TTS states
   const [isSpeaking, setIsSpeaking] = useState(false);
-  const [speechQueue, setSpeechQueue] = useState([]);
+  const [isLoadingAudio, setIsLoadingAudio] = useState(false);
   const [currentSpeechId, setCurrentSpeechId] = useState(null);
+  const [currentChunkIndex, setCurrentChunkIndex] = useState(0);
+  const [totalChunks, setTotalChunks] = useState(0);
   const [ttsSettings, setTtsSettings] = useState({
     enabled: true,
     autoSpeak: false,
-    voice: null,
-    rate: 1.0,
-    pitch: 1.0,
-    volume: 0.8,
-    language: 'auto' // auto-detect from text or use specific language
+    voice: 'alloy',
+    speed: 1.0,
+    language: 'auto'
   });
-  const [availableVoices, setAvailableVoices] = useState([]);
+
+  // Audio management refs
+  const audioRef = useRef(null);
+  const abortControllerRef = useRef(null);
+  const currentTextRef = useRef('');
+  const chunksQueueRef = useRef([]);
+  const isPlayingChunksRef = useRef(false);
 
   // Voice settings modal
   const [showVoiceSettings, setShowVoiceSettings] = useState(false);
 
-  // Refs for auto-scrolling and TTS
+  // Refs for auto-scrolling
   const messagesEndRef = useRef(null);
   const chatMessagesRef = useRef(null);
   const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
-  const speechSynthRef = useRef(null);
 
   // Speech recognition ref for Web Speech API fallback
   const recognitionRef = useRef(null);
-
+  
   // API base URL
   const API_BASE_URL = process.env.REACT_APP_API_URL;
-  const USER_ID = 'user123'; // In real app, get from auth
+  const USER_ID = 'user123';
 
-  // Initialize voice capabilities including TTS
+  // Initialize voice capabilities
   useEffect(() => {
     initializeVoiceCapabilities();
-    initializeTextToSpeech();
+    initializeAudioPlayer();
     
     return () => {
       cleanup();
@@ -72,73 +76,300 @@ const DocumentAssistant = () => {
   }, []);
 
   const initializeVoiceCapabilities = async () => {
-    // Check for MediaRecorder support (preferred method)
     if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder) {
       setVoiceSupported(true);
     }
 
-    // Check for Web Speech API as fallback
     if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
       setWebSpeechSupported(true);
       initializeWebSpeechAPI();
     }
   };
 
-  const initializeTextToSpeech = () => {
-    if ('speechSynthesis' in window) {
-      setTtsSupported(true);
-      speechSynthRef.current = window.speechSynthesis;
+  const initializeAudioPlayer = () => {
+    if (!audioRef.current) {
+      audioRef.current = new Audio();
       
-      // Load available voices
-      const loadVoices = () => {
-        const voices = speechSynthRef.current.getVoices();
-        setAvailableVoices(voices);
+      audioRef.current.onloadstart = () => {
+        console.log('Audio loading started');
+        setIsLoadingAudio(true);
+      };
+
+      audioRef.current.oncanplay = () => {
+        console.log('Audio can start playing');
+        setIsLoadingAudio(false);
+      };
+
+      audioRef.current.onplay = () => {
+        console.log('Audio started playing');
+        setIsSpeaking(true);
+        setIsLoadingAudio(false);
+      };
+
+      audioRef.current.onended = () => {
+        console.log('Audio chunk ended');
+        setIsLoadingAudio(false);
         
-        // Set default voice (prefer English or user's language)
-        if (!ttsSettings.voice && voices.length > 0) {
-          const preferredVoice = voices.find(voice => 
-            voice.lang.startsWith('en') && voice.default
-          ) || voices.find(voice => 
-            voice.lang.startsWith('en')
-          ) || voices[0];
-          
-          setTtsSettings(prev => ({
-            ...prev,
-            voice: preferredVoice
-          }));
+        // Check if there are more chunks to play
+        if (isPlayingChunksRef.current && chunksQueueRef.current.length > 0) {
+          playNextChunk();
+        } else {
+          // All chunks completed
+          setIsSpeaking(false);
+          setCurrentSpeechId(null);
+          setCurrentChunkIndex(0);
+          setTotalChunks(0);
+          isPlayingChunksRef.current = false;
+          chunksQueueRef.current = [];
         }
       };
-
-      // Load voices immediately and on voiceschanged event
-      loadVoices();
-      speechSynthRef.current.addEventListener('voiceschanged', loadVoices);
-
-      // Handle speech events
-      const handleSpeechEnd = () => {
-        setIsSpeaking(false);
-        setCurrentSpeechId(null);
-        processSpeechQueue();
-      };
-
-      const handleSpeechError = (error) => {
-        console.error('Speech synthesis error:', error);
-        setIsSpeaking(false);
-        setCurrentSpeechId(null);
-        processSpeechQueue();
-      };
-
-      // Store event handlers for cleanup
-      speechSynthRef.current.addEventListener('end', handleSpeechEnd);
-      speechSynthRef.current.addEventListener('error', handleSpeechError);
       
-      return () => {
-        if (speechSynthRef.current) {
-          speechSynthRef.current.removeEventListener('voiceschanged', loadVoices);
-          speechSynthRef.current.removeEventListener('end', handleSpeechEnd);
-          speechSynthRef.current.removeEventListener('error', handleSpeechError);
-        }
+      audioRef.current.onerror = (error) => {
+        console.error('Audio playback error:', error);
+        setIsLoadingAudio(false);
+        
+        // Don't show error immediately if we're just loading
+        setTimeout(() => {
+          if (!audioRef.current?.src || audioRef.current.readyState === 0) {
+            return; // Still loading, don't show error
+          }
+          setError('Audio playback failed');
+          setIsSpeaking(false);
+          setCurrentSpeechId(null);
+          isPlayingChunksRef.current = false;
+        }, 2000); // Give 2 seconds for loading before showing error
+      };
+
+      audioRef.current.onpause = () => {
+        console.log('Audio paused');
+        setIsSpeaking(false);
+      };
+
+      // Handle loading states better
+      audioRef.current.onwaiting = () => {
+        console.log('Audio waiting for data');
+        setIsLoadingAudio(true);
+      };
+
+      audioRef.current.onplaying = () => {
+        console.log('Audio playing');
+        setIsLoadingAudio(false);
+        setIsSpeaking(true);
       };
     }
+  };
+
+  // Fast chunked TTS with immediate start and auto language detection
+  const speakText = async (text, messageId = null) => {
+    if (!ttsSettings.enabled || !text.trim()) return;
+
+    // Stop any ongoing speech
+    stopSpeaking();
+
+    try {
+      setCurrentSpeechId(messageId);
+      setIsLoadingAudio(true);
+      currentTextRef.current = text;
+      
+      // Abort any previous requests
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+      abortControllerRef.current = new AbortController();
+
+      console.log('Starting chunked TTS for text length:', text.length);
+      console.log('TTS Settings:', ttsSettings);
+
+      // Prepare TTS request - let backend auto-detect language if set to 'auto'
+      const ttsRequestBody = {
+        text: text,
+        voice: ttsSettings.voice,
+        speed: ttsSettings.speed,
+      };
+
+      // Only send language if it's not 'auto' - let backend handle auto-detection
+      if (ttsSettings.language && ttsSettings.language !== 'auto') {
+        ttsRequestBody.language = ttsSettings.language;
+        console.log('Using specified language:', ttsSettings.language);
+      } else {
+        console.log('Using auto language detection');
+        // Don't send language parameter - backend will auto-detect
+      }
+
+      // Get first chunk immediately to start playing
+      const response = await fetch(`${API_BASE_URL}/voice/text-to-speech/chunk/0`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(ttsRequestBody),
+        signal: abortControllerRef.current.signal
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('TTS response error:', response.status, errorText);
+        throw new Error(`TTS request failed: ${response.status} - ${errorText}`);
+      }
+
+      // Get chunk info from headers
+      const totalChunksHeader = response.headers.get('X-Total-Chunks');
+      const currentChunkHeader = response.headers.get('X-Current-Chunk');
+      
+      const totalChunksCount = parseInt(totalChunksHeader) || 1;
+      const currentChunk = parseInt(currentChunkHeader) || 0;
+      
+      setTotalChunks(totalChunksCount);
+      setCurrentChunkIndex(currentChunk);
+
+      console.log(`Got chunk ${currentChunk} of ${totalChunksCount}`);
+
+      // Play first chunk immediately
+      const firstAudioBlob = await response.blob();
+      
+      if (abortControllerRef.current?.signal.aborted) return;
+
+      const audioUrl = URL.createObjectURL(firstAudioBlob);
+      audioRef.current.src = audioUrl;
+      
+      // Start playing first chunk
+      try {
+        await audioRef.current.play();
+        
+        // If there are more chunks, start fetching them in parallel
+        if (totalChunksCount > 1) {
+          isPlayingChunksRef.current = true;
+          fetchRemainingChunks(text, totalChunksCount);
+        }
+        
+      } catch (playError) {
+        console.error('Error playing first chunk:', playError);
+        URL.revokeObjectURL(audioUrl);
+        throw playError;
+      }
+
+    } catch (error) {
+      if (error.name === 'AbortError') {
+        console.log('TTS request was cancelled');
+        return;
+      }
+      
+      console.error('TTS error:', error);
+      setError(`Text-to-speech failed: ${error.message}`);
+      setIsSpeaking(false);
+      setCurrentSpeechId(null);
+      setIsLoadingAudio(false);
+    }
+  };
+
+  // Fetch remaining chunks in background
+  const fetchRemainingChunks = async (text, totalChunks) => {
+    try {
+      // Fetch chunks 1 through totalChunks-1
+      const chunkPromises = [];
+      
+      for (let i = 1; i < totalChunks; i++) {
+        const chunkPromise = fetch(`${API_BASE_URL}/voice/text-to-speech/chunk/${i}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            text: text,
+            language: ttsSettings.language === 'auto' ? null : ttsSettings.language,
+            voice: ttsSettings.voice,
+            speed: ttsSettings.speed,
+          }),
+          signal: abortControllerRef.current?.signal
+        }).then(response => {
+          if (!response.ok) throw new Error(`Chunk ${i} failed`);
+          return response.blob();
+        });
+        
+        chunkPromises.push(chunkPromise);
+      }
+
+      // Wait for all chunks
+      const chunkBlobs = await Promise.all(chunkPromises);
+      
+      if (abortControllerRef.current?.signal.aborted) return;
+
+      // Convert to URLs and queue them
+      chunksQueueRef.current = chunkBlobs.map(blob => URL.createObjectURL(blob));
+      
+      console.log(`Fetched ${chunksQueueRef.current.length} additional chunks`);
+      
+    } catch (error) {
+      if (error.name === 'AbortError') return;
+      console.error('Error fetching chunks:', error);
+    }
+  };
+
+  // Play next chunk from queue
+  const playNextChunk = () => {
+    if (chunksQueueRef.current.length === 0) {
+      // No more chunks, finish
+      setIsSpeaking(false);
+      setCurrentSpeechId(null);
+      isPlayingChunksRef.current = false;
+      return;
+    }
+
+    const nextChunkUrl = chunksQueueRef.current.shift();
+    setCurrentChunkIndex(prev => prev + 1);
+    
+    // Clean up previous URL
+    if (audioRef.current.src) {
+      URL.revokeObjectURL(audioRef.current.src);
+    }
+    
+    audioRef.current.src = nextChunkUrl;
+    audioRef.current.play().catch(error => {
+      console.error('Error playing next chunk:', error);
+      URL.revokeObjectURL(nextChunkUrl);
+    });
+  };
+
+  const stopSpeaking = () => {
+    console.log('Stopping speech');
+    
+    // Abort any ongoing requests
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    
+    // Stop audio and cleanup
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
+      
+      // Clean up object URL
+      if (audioRef.current.src) {
+        URL.revokeObjectURL(audioRef.current.src);
+        audioRef.current.src = '';
+      }
+    }
+    
+    // Clean up queued chunks
+    chunksQueueRef.current.forEach(url => URL.revokeObjectURL(url));
+    chunksQueueRef.current = [];
+    isPlayingChunksRef.current = false;
+    
+    setIsSpeaking(false);
+    setIsLoadingAudio(false);
+    setCurrentSpeechId(null);
+    setCurrentChunkIndex(0);
+    setTotalChunks(0);
+  };
+
+  const handleSpeakMessage = (message) => {
+    if (currentSpeechId === message.id) {
+      stopSpeaking();
+    } else {
+      speakText(message.content, message.id);
+    }
+  };
+
+  const testVoice = () => {
+    const testText = "Hello! This is a test of the text-to-speech functionality. How does it sound?";
+    speakText(testText, 'test');
   };
 
   const initializeWebSpeechAPI = () => {
@@ -153,7 +384,6 @@ const DocumentAssistant = () => {
     recognition.onstart = () => {
       setIsRecording(true);
       setError(null);
-      // Stop any ongoing speech when starting to record
       stopSpeaking();
     };
 
@@ -191,123 +421,6 @@ const DocumentAssistant = () => {
     };
   };
 
-  // Text-to-Speech Functions
-  const speakText = (text, messageId = null, options = {}) => {
-    if (!ttsSupported || !ttsSettings.enabled || !text.trim()) {
-      return;
-    }
-
-    // Stop current speech if any
-    if (isSpeaking) {
-      stopSpeaking();
-    }
-
-    const utterance = new SpeechSynthesisUtterance(text);
-    
-    // Apply settings
-    utterance.voice = options.voice || ttsSettings.voice;
-    utterance.rate = options.rate || ttsSettings.rate;
-    utterance.pitch = options.pitch || ttsSettings.pitch;
-    utterance.volume = options.volume || ttsSettings.volume;
-    
-    // Set language based on settings or detection
-    if (options.language) {
-      utterance.lang = options.language;
-    } else if (ttsSettings.language === 'auto') {
-      // Try to detect language from text or use voice language
-      utterance.lang = detectLanguageFromText(text) || (ttsSettings.voice?.lang) || 'en-US';
-    } else {
-      utterance.lang = ttsSettings.language;
-    }
-
-    // Event handlers
-    utterance.onstart = () => {
-      setIsSpeaking(true);
-      setCurrentSpeechId(messageId);
-    };
-
-    utterance.onend = () => {
-      setIsSpeaking(false);
-      setCurrentSpeechId(null);
-      processSpeechQueue();
-    };
-
-    utterance.onerror = (event) => {
-      console.error('Speech synthesis error:', event);
-      setIsSpeaking(false);
-      setCurrentSpeechId(null);
-      processSpeechQueue();
-    };
-
-    // Speak immediately
-    speechSynthRef.current.speak(utterance);
-  };
-
-  const stopSpeaking = () => {
-    if (speechSynthRef.current && isSpeaking) {
-      speechSynthRef.current.cancel();
-      setIsSpeaking(false);
-      setCurrentSpeechId(null);
-      setSpeechQueue([]);
-    }
-  };
-
-  const processSpeechQueue = () => {
-    if (speechQueue.length > 0 && !isSpeaking) {
-      const nextSpeech = speechQueue[0];
-      setSpeechQueue(prev => prev.slice(1));
-      speakText(nextSpeech.text, nextSpeech.messageId, nextSpeech.options);
-    }
-  };
-
-  const queueSpeech = (text, messageId = null, options = {}) => {
-    setSpeechQueue(prev => [...prev, { text, messageId, options }]);
-    if (!isSpeaking) {
-      processSpeechQueue();
-    }
-  };
-
-  const handleSpeakMessage = (message) => {
-    if (currentSpeechId === message.id) {
-      stopSpeaking();
-    } else {
-      speakText(message.content, message.id);
-    }
-  };
-
-  const detectLanguageFromText = (text) => {
-    // Simple language detection based on character patterns
-    // This is basic - for production, consider using a proper language detection library
-    
-    // Turkish detection
-    if (/[ğüşıöçĞÜŞİÖÇ]/.test(text)) {
-      return 'tr-TR';
-    }
-    
-    // German detection
-    if (/[äöüßÄÖÜ]/.test(text)) {
-      return 'de-DE';
-    }
-    
-    // French detection
-    if (/[àâäéèêëïîôùûüÿñç]/.test(text)) {
-      return 'fr-FR';
-    }
-    
-    // Spanish detection
-    if (/[ñáéíóúü¿¡]/.test(text)) {
-      return 'es-ES';
-    }
-    
-    // Default to English
-    return 'en-US';
-  };
-
-  const testVoice = () => {
-    const testText = "Hello! This is a test of the text-to-speech functionality. How does it sound?";
-    speakText(testText, 'test', ttsSettings);
-  };
-
   // Update recognition language when voice language changes
   useEffect(() => {
     if (recognitionRef.current) {
@@ -320,17 +433,15 @@ const DocumentAssistant = () => {
     if (ttsSettings.autoSpeak && messages.length > 0) {
       const lastMessage = messages[messages.length - 1];
       if (lastMessage.type === 'assistant' && !lastMessage.hasBeenSpoken) {
-        // Mark as spoken to avoid re-speaking
         setMessages(prev => prev.map(msg => 
           msg.id === lastMessage.id 
             ? { ...msg, hasBeenSpoken: true }
             : msg
         ));
         
-        // Speak the message
         setTimeout(() => {
           speakText(lastMessage.content, lastMessage.id);
-        }, 500); // Small delay to ensure UI is updated
+        }, 500);
       }
     }
   }, [messages, ttsSettings.autoSpeak]);
@@ -342,15 +453,12 @@ const DocumentAssistant = () => {
     if (recognitionRef.current) {
       recognitionRef.current.stop();
     }
-    if (speechSynthRef.current && isSpeaking) {
-      speechSynthRef.current.cancel();
-    }
+    stopSpeaking();
   };
 
-  // MediaRecorder-based voice recording (preferred method)
+  // MediaRecorder-based voice recording
   const startRecording = async () => {
     try {
-      // Stop any ongoing speech
       stopSpeaking();
       
       const stream = await navigator.mediaDevices.getUserMedia({ 
@@ -376,8 +484,6 @@ const DocumentAssistant = () => {
       recorder.onstop = async () => {
         const audioBlob = new Blob(chunks, { type: 'audio/webm' });
         await transcribeAudio(audioBlob);
-        
-        // Cleanup
         stream.getTracks().forEach(track => track.stop());
         setAudioChunks([]);
       };
@@ -401,7 +507,6 @@ const DocumentAssistant = () => {
     }
   };
 
-  // Transcribe audio using backend Whisper API
   const transcribeAudio = async (audioBlob) => {
     setIsTranscribing(true);
     
@@ -409,7 +514,6 @@ const DocumentAssistant = () => {
       const formData = new FormData();
       formData.append('audio_file', audioBlob, 'recording.webm');
       
-      // Only send language if not auto-detect
       if (voiceLanguage && voiceLanguage !== 'auto') {
         formData.append('language', voiceLanguage);
       }
@@ -423,17 +527,13 @@ const DocumentAssistant = () => {
       const { text, confidence, language, auto_detected } = response.data;
       
       if (text && text.trim()) {
-        // Store detected language info
         if (auto_detected && language) {
           setDetectedLanguage(language);
         }
         
-        // Check for voice commands first
-        if (!processVoiceCommand(text.trim())) {
-          setQuery(prev => prev + text);
-          if (confidence) {
-            setConfidence(confidence);
-          }
+        setQuery(prev => prev + text);
+        if (confidence) {
+          setConfidence(confidence);
         }
       }
       
@@ -446,11 +546,10 @@ const DocumentAssistant = () => {
     }
   };
 
-  // Web Speech API fallback methods
   const startWebSpeechRecording = () => {
     if (recognitionRef.current && webSpeechSupported) {
       try {
-        stopSpeaking(); // Stop any ongoing speech
+        stopSpeaking();
         recognitionRef.current.start();
       } catch (error) {
         console.error('Error starting speech recognition:', error);
@@ -465,7 +564,6 @@ const DocumentAssistant = () => {
     }
   };
 
-  // Main voice recording toggle
   const toggleRecording = () => {
     if (isRecording) {
       if (useWebSpeech) {
@@ -480,45 +578,6 @@ const DocumentAssistant = () => {
         startRecording();
       }
     }
-  };
-
-  // Voice Commands (enhanced with TTS commands)
-  const processVoiceCommand = (command) => {
-    const lowerCommand = command.toLowerCase().trim();
-    
-    if (lowerCommand.includes('new chat') || lowerCommand.includes('start new conversation')) {
-      createNewConversation();
-      return true;
-    }
-    
-    if (lowerCommand.includes('delete conversation') || lowerCommand.includes('delete chat')) {
-      if (currentConversation) {
-        deleteConversation(currentConversation.conversation_id);
-      }
-      return true;
-    }
-    
-    if (lowerCommand.includes('clear input') || lowerCommand.includes('clear text')) {
-      setQuery('');
-      return true;
-    }
-    
-    if (lowerCommand.includes('stop speaking') || lowerCommand.includes('stop reading')) {
-      stopSpeaking();
-      return true;
-    }
-    
-    if (lowerCommand.includes('read last message') || lowerCommand.includes('repeat')) {
-      if (messages.length > 0) {
-        const lastMessage = messages[messages.length - 1];
-        if (lastMessage.type === 'assistant') {
-          speakText(lastMessage.content, lastMessage.id);
-        }
-      }
-      return true;
-    }
-    
-    return false;
   };
 
   // Auto-scroll functions
@@ -620,7 +679,7 @@ const DocumentAssistant = () => {
         })) : [],
         timestamp: new Date(msg.timestamp),
         voiceMetadata: msg.voice_metadata,
-        hasBeenSpoken: true // Mark existing messages as spoken to avoid auto-speaking on load
+        hasBeenSpoken: true
       }));
       
       setMessages(frontendMessages);
@@ -677,13 +736,6 @@ const DocumentAssistant = () => {
     if (!query.trim()) return;
 
     const currentQuery = query;
-    
-    // Check for voice commands first
-    if (processVoiceCommand(currentQuery)) {
-      setQuery('');
-      return;
-    }
-
     setQuery('');
     
     let targetConversation = currentConversation;
@@ -709,7 +761,6 @@ const DocumentAssistant = () => {
     setError(null);
     setShouldAutoScroll(true);
     
-    // Reset confidence after using it
     setConfidence(0);
     
     try {
@@ -731,7 +782,7 @@ const DocumentAssistant = () => {
           snippet: chunk.length > 150 ? chunk.substring(0, 150) + "..." : chunk
         })),
         timestamp: new Date(),
-        hasBeenSpoken: false // Mark as not spoken for auto-speak functionality
+        hasBeenSpoken: false
       };
       
       setMessages(prev => [...prev, assistantMessage]);
@@ -775,7 +826,7 @@ const DocumentAssistant = () => {
     setCurrentConversation(conversation);
     setError(null);
     setShouldAutoScroll(true);
-    stopSpeaking(); // Stop any ongoing speech when switching conversations
+    stopSpeaking();
   };
 
   const handleKeyPress = (e) => {
@@ -785,7 +836,6 @@ const DocumentAssistant = () => {
     }
   };
 
-  // Helper function to get language display name
   const getLanguageName = (languageCode) => {
     const languageNames = {
       'en': 'English',
@@ -805,7 +855,7 @@ const DocumentAssistant = () => {
     return languageNames[languageCode] || languageCode;
   };
 
-  // Enhanced Voice Settings Modal Component
+  // Voice Settings Modal Component
   const VoiceSettingsModal = () => (
     <div className="voice-settings-modal" style={{ display: showVoiceSettings ? 'flex' : 'none' }}>
       <div className="voice-settings-content">
@@ -830,7 +880,7 @@ const DocumentAssistant = () => {
                 {webSpeechSupported && <option value="webspeech">Web Speech API (Fallback)</option>}
               </select>
               <small className="setting-help">
-                Whisper provides better accuracy and auto-detects language. Web Speech works offline in supported browsers.
+                Whisper provides better accuracy and auto-detects language.
               </small>
             </div>
 
@@ -858,154 +908,111 @@ const DocumentAssistant = () => {
           </div>
 
           {/* Text-to-Speech Section */}
-          {ttsSupported && (
-            <div className="setting-section">
-              <h4>Text-to-Speech</h4>
-              
-              <div className="setting-group">
-                <label className="checkbox-label">
-                  <input
-                    type="checkbox"
-                    checked={ttsSettings.enabled}
-                    onChange={(e) => setTtsSettings(prev => ({ ...prev, enabled: e.target.checked }))}
-                  />
-                  Enable Text-to-Speech
-                </label>
-              </div>
-
-              <div className="setting-group">
-                <label className="checkbox-label">
-                  <input
-                    type="checkbox"
-                    checked={ttsSettings.autoSpeak}
-                    onChange={(e) => setTtsSettings(prev => ({ ...prev, autoSpeak: e.target.checked }))}
-                    disabled={!ttsSettings.enabled}
-                  />
-                  Auto-speak assistant responses
-                </label>
-                <small className="setting-help">
-                  Automatically read out loud new assistant messages
-                </small>
-              </div>
-
-              <div className="setting-group">
-                <label>Voice Selection</label>
-                <select 
-                  value={ttsSettings.voice?.name || ''} 
-                  onChange={(e) => {
-                    const selectedVoice = availableVoices.find(voice => voice.name === e.target.value);
-                    setTtsSettings(prev => ({ ...prev, voice: selectedVoice }));
-                  }}
-                  className="setting-select"
-                  disabled={!ttsSettings.enabled}
-                >
-                  {availableVoices.map((voice, index) => (
-                    <option key={index} value={voice.name}>
-                      {voice.name} ({voice.lang}) {voice.default ? '(Default)' : ''}
-                    </option>
-                  ))}
-                </select>
-                <small className="setting-help">
-                  Choose the voice for text-to-speech output
-                </small>
-              </div>
-
-              <div className="setting-group">
-                <label>Speech Rate: {ttsSettings.rate.toFixed(1)}x</label>
-                <input
-                  type="range"
-                  min="0.5"
-                  max="2.0"
-                  step="0.1"
-                  value={ttsSettings.rate}
-                  onChange={(e) => setTtsSettings(prev => ({ ...prev, rate: parseFloat(e.target.value) }))}
-                  className="setting-slider"
-                  disabled={!ttsSettings.enabled}
-                />
-                <small className="setting-help">
-                  Control how fast the speech is delivered
-                </small>
-              </div>
-
-              <div className="setting-group">
-                <label>Speech Pitch: {ttsSettings.pitch.toFixed(1)}</label>
-                <input
-                  type="range"
-                  min="0.5"
-                  max="2.0"
-                  step="0.1"
-                  value={ttsSettings.pitch}
-                  onChange={(e) => setTtsSettings(prev => ({ ...prev, pitch: parseFloat(e.target.value) }))}
-                  className="setting-slider"
-                  disabled={!ttsSettings.enabled}
-                />
-                <small className="setting-help">
-                  Adjust the pitch of the voice
-                </small>
-              </div>
-
-              <div className="setting-group">
-                <label>Volume: {Math.round(ttsSettings.volume * 100)}%</label>
-                <input
-                  type="range"
-                  min="0.1"
-                  max="1.0"
-                  step="0.1"
-                  value={ttsSettings.volume}
-                  onChange={(e) => setTtsSettings(prev => ({ ...prev, volume: parseFloat(e.target.value) }))}
-                  className="setting-slider"
-                  disabled={!ttsSettings.enabled}
-                />
-                <small className="setting-help">
-                  Control the volume of speech output
-                </small>
-              </div>
-
-              <div className="setting-group">
-                <label>Speech Language</label>
-                <select 
-                  value={ttsSettings.language} 
-                  onChange={(e) => setTtsSettings(prev => ({ ...prev, language: e.target.value }))}
-                  className="setting-select"
-                  disabled={!ttsSettings.enabled}
-                >
-                  <option value="auto">Auto-detect from text</option>
-                  <option value="en-US">English (US)</option>
-                  <option value="en-GB">English (UK)</option>
-                  <option value="tr-TR">Türkçe</option>
-                  <option value="de-DE">Deutsch</option>
-                  <option value="fr-FR">Français</option>
-                  <option value="es-ES">Español</option>
-                  <option value="it-IT">Italiano</option>
-                  <option value="pt-PT">Português</option>
-                  <option value="ru-RU">Русский</option>
-                  <option value="ja-JP">日本語</option>
-                  <option value="ko-KR">한국어</option>
-                  <option value="zh-CN">中文</option>
-                </select>
-                <small className="setting-help">
-                  Choose language for speech synthesis or let it auto-detect
-                </small>
-              </div>
-            </div>
-          )}
-
-          {/* Voice Commands Section */}
           <div className="setting-section">
+            <h4>Text-to-Speech</h4>
+            
+            <div className="setting-group">
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={ttsSettings.enabled}
+                  onChange={(e) => setTtsSettings(prev => ({ ...prev, enabled: e.target.checked }))}
+                />
+                Enable Text-to-Speech
+              </label>
+            </div>
+
+            <div className="setting-group">
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={ttsSettings.autoSpeak}
+                  onChange={(e) => setTtsSettings(prev => ({ ...prev, autoSpeak: e.target.checked }))}
+                  disabled={!ttsSettings.enabled}
+                />
+                Auto-speak assistant responses
+              </label>
+              <small className="setting-help">
+                Automatically read out loud new assistant messages
+              </small>
+            </div>
+
+            <div className="setting-group">
+              <label>Voice Selection</label>
+              <select 
+                value={ttsSettings.voice} 
+                onChange={(e) => setTtsSettings(prev => ({ ...prev, voice: e.target.value }))}
+                className="setting-select"
+                disabled={!ttsSettings.enabled}
+              >
+                <option value="alloy">Alloy (Neutral)</option>
+                <option value="echo">Echo (Male)</option>
+                <option value="fable">Fable (British Male)</option>
+                <option value="onyx">Onyx (Deep Male)</option>
+                <option value="nova">Nova (Female)</option>
+                <option value="shimmer">Shimmer (Soft Female)</option>
+              </select>
+              <small className="setting-help">
+                Choose from OpenAI's high-quality TTS voices
+              </small>
+            </div>
+
+            <div className="setting-group">
+              <label>Speech Speed: {ttsSettings.speed.toFixed(1)}x</label>
+              <input
+                type="range"
+                min="0.25"
+                max="4.0"
+                step="0.25"
+                value={ttsSettings.speed}
+                onChange={(e) => setTtsSettings(prev => ({ ...prev, speed: parseFloat(e.target.value) }))}
+                className="setting-slider"
+                disabled={!ttsSettings.enabled}
+              />
+              <small className="setting-help">
+                Control how fast the speech is delivered (0.25x to 4.0x)
+              </small>
+            </div>
+
+            <div className="setting-group">
+              <label>Speech Language</label>
+              <select 
+                value={ttsSettings.language} 
+                onChange={(e) => setTtsSettings(prev => ({ ...prev, language: e.target.value }))}
+                className="setting-select"
+                disabled={!ttsSettings.enabled}
+              >
+                <option value="auto">Auto-detect from text</option>
+                <option value="en">English</option>
+                <option value="tr">Türkçe</option>
+                <option value="de">Deutsch</option>
+                <option value="fr">Français</option>
+                <option value="es">Español</option>
+                <option value="it">Italiano</option>
+                <option value="pt">Português</option>
+                <option value="ru">Русский</option>
+                <option value="ja">日本語</option>
+                <option value="ko">한국어</option>
+                <option value="zh">中文</option>
+                <option value="ar">العربية</option>
+                <option value="hi">हिन्दी</option>
+              </select>
+              <small className="setting-help">
+                Choose language for speech synthesis or let it auto-detect
+              </small>
+            </div>
           </div>
         </div>
 
         <div className="voice-settings-footer">
-          {ttsSupported && (
-            <button 
-              onClick={testVoice} 
-              className="test-voice-button"
-              disabled={!ttsSettings.enabled}
-            >
-              {isSpeaking ? <VolumeX size={16} /> : <Volume2 size={16} />}
-              {isSpeaking ? 'Stop Test' : 'Test Voice'}
-            </button>
-          )}
+          <button 
+            onClick={testVoice} 
+            className="test-voice-button"
+            disabled={!ttsSettings.enabled}
+          >
+            {isSpeaking && currentSpeechId === 'test' ? <VolumeX size={16} /> : <Volume2 size={16} />}
+            {isSpeaking && currentSpeechId === 'test' ? 'Stop Test' : 'Test Voice'}
+          </button>
         </div>
       </div>
     </div>
@@ -1023,7 +1030,7 @@ const DocumentAssistant = () => {
             <h1 className="title">Document Assistant</h1>
             <div className="header-controls">
               {/* Global speech control */}
-              {ttsSupported && isSpeaking && (
+              {isSpeaking && (
                 <button 
                   onClick={stopSpeaking}
                   className="stop-speech-button"
@@ -1135,10 +1142,19 @@ const DocumentAssistant = () => {
               <div className="chat-header-controls">
                 {/* Voice status indicators */}
                 <div className="voice-status">
-                  {isSpeaking && (
+                  {(isSpeaking || isLoadingAudio) && (
                     <span className="speaking-indicator">
-                      <Volume2 size={16} />
-                      Speaking...
+                      {isLoadingAudio ? (
+                        <>
+                          <Loader2 size={16} className="animate-spin" />
+                          Loading audio...
+                        </>
+                      ) : (
+                        <>
+                          <Volume2 size={16} />
+                          Speaking {totalChunks > 1 ? `(${currentChunkIndex + 1}/${totalChunks})` : ''}...
+                        </>
+                      )}
                     </span>
                   )}
                   {isRecording && (
@@ -1176,10 +1192,10 @@ const DocumentAssistant = () => {
                       Voice input is available! Click the microphone to start.
                     </p>
                   )}
-                  {ttsSupported && (
+                  {ttsSettings.enabled && (
                     <p className="voice-hint">
                       <Volume2 size={16} />
-                      Text-to-speech enabled! Assistant responses can be read aloud.
+                      Fast text-to-speech enabled! Assistant responses can be read aloud.
                     </p>
                   )}
                   
@@ -1197,13 +1213,10 @@ const DocumentAssistant = () => {
                   <h3>Start the Conversation</h3>
                   <p>Ask me anything about your documents. I'll search through them and provide you with accurate answers.</p>
                   
-                  {/* Voice Commands Help */}
-                  {(voiceSupported || webSpeechSupported || ttsSupported)}
-                  
                   {/* Quick suggestions */}
                   <div className="suggestions">
                     <p>Try asking:</p>
-                    {['What is leasing ?', 'What are the adventages of leasing ?', 'Are there any tax benefits in leasing ?'].map((suggestion, index) => (
+                    {['What is leasing ?', 'What are the advantages of leasing ?', 'Are there any tax benefits in leasing ?'].map((suggestion, index) => (
                       <button
                         key={index}
                         onClick={() => setQuery(suggestion)}
@@ -1224,14 +1237,19 @@ const DocumentAssistant = () => {
                         </span>
                         <div className="message-actions">
                           {/* Speak button for assistant messages */}
-                          {message.type === 'assistant' && ttsSupported && ttsSettings.enabled && (
+                          {message.type === 'assistant' && ttsSettings.enabled && (
                             <button
                               onClick={() => handleSpeakMessage(message)}
                               className="speak-message-button"
                               title={currentSpeechId === message.id ? 'Stop speaking' : 'Read message aloud'}
+                              disabled={isLoadingAudio && currentSpeechId !== message.id}
                             >
                               {currentSpeechId === message.id ? (
-                                <VolumeX size={14} />
+                                isLoadingAudio ? (
+                                  <Loader2 size={14} className="animate-spin" />
+                                ) : (
+                                  <VolumeX size={14} />
+                                )
                               ) : (
                                 <Volume2 size={14} />
                               )}
@@ -1245,8 +1263,17 @@ const DocumentAssistant = () => {
                         {/* Speaking indicator for current message */}
                         {currentSpeechId === message.id && (
                           <div className="speaking-indicator-inline">
-                            <Volume2 size={12} />
-                            <span>Speaking...</span>
+                            {isLoadingAudio ? (
+                              <>
+                                <Loader2 size={12} className="animate-spin" />
+                                <span>Loading audio...</span>
+                              </>
+                            ) : (
+                              <>
+                                <Volume2 size={12} />
+                                <span>Speaking {totalChunks > 1 ? `(${currentChunkIndex + 1}/${totalChunks})` : ''}...</span>
+                              </>
+                            )}
                           </div>
                         )}
                       </div>
@@ -1363,7 +1390,7 @@ const DocumentAssistant = () => {
                 {/* Voice Controls */}
                 <div className="voice-controls">
                   {/* Global stop speaking button (when speaking and not recording) */}
-                  {ttsSupported && isSpeaking && !isRecording && (
+                  {(isSpeaking || isLoadingAudio) && !isRecording && (
                     <button
                       onClick={stopSpeaking}
                       className="stop-speech-button"

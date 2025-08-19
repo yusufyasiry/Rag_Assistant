@@ -7,7 +7,7 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 
 class Prompts:
     
-    def __init__(self, model="gpt-5-nano") -> None:
+    def __init__(self, model="gpt-4-mini") -> None:
         self.model = model
     
     def generate_multi_query(self, original_query:str):

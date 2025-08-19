@@ -19,6 +19,8 @@ from openai.types.chat import ChatCompletionMessageParam
 import shutil
 from ingestor import Ingestor
 import asyncio
+from fastapi.responses import StreamingResponse
+import io
 
 
 
@@ -55,6 +57,12 @@ class DocumentResponse:
     processed_at: Optional[datetime] = None
     error_message: Optional[str] = None
 
+class TTSRequest(BaseModel):
+    text: str
+    language: Optional[str] = None  # Auto-detect if not specified
+    voice: str = "nova"  # OpenAI TTS voice
+    speed: float = 1.0
+
 
 def detect_language_name(text: str) -> str:
     code, conf = langid.classify(text or "")
@@ -63,6 +71,75 @@ def detect_language_name(text: str) -> str:
     # tiny fallback
     return "Turkish" if any(c in "çğıöşüÇĞİÖŞÜ" for c in (text or "")) else "English"
 
+def detect_language_code(text: str) -> str:
+    """
+    Detect language and return language code for TTS
+    Enhanced with proper confidence handling for langid
+    """
+    if not text or not text.strip():
+        return "en"  # Default to English for empty text
+    
+    try:
+        code, confidence = langid.classify(text)
+        print(f"Language detection: '{text[:30]}...' -> {code} (confidence: {confidence:.2f})")
+        
+        # Note: langid confidence is actually a log probability, so negative values are normal
+        # Higher (less negative) values indicate better confidence
+        # Typical range is around -1000 to -50 for confident predictions
+        
+        # For langid, we should look at the actual language code and do character-based validation
+        # rather than relying solely on the confidence score
+        
+        # Map language codes to supported TTS languages
+        language_map = {
+            "tr": "tr",  # Turkish
+            "en": "en",  # English
+            "de": "de",  # German
+            "fr": "fr",  # French
+            "es": "es",  # Spanish
+            "it": "it",  # Italian
+            "pt": "pt",  # Portuguese
+            "ru": "ru",  # Russian
+            "ja": "ja",  # Japanese
+            "ko": "ko",  # Korean
+            "zh": "zh",  # Chinese
+            "ar": "ar",  # Arabic
+            "hi": "hi",  # Hindi
+            "nl": "en",  # Dutch -> English (not supported by OpenAI TTS)
+            "pl": "en",  # Polish -> English (not supported by OpenAI TTS)
+            "sv": "en",  # Swedish -> English (not supported by OpenAI TTS)
+            "da": "en",  # Danish -> English (not supported by OpenAI TTS)
+            "no": "en",  # Norwegian -> English (not supported by OpenAI TTS)
+            "fi": "en",  # Finnish -> English (not supported by OpenAI TTS)
+        }
+        
+        detected_lang = language_map.get(code, "en")  # Default to English for unsupported languages
+        
+        # Special handling for Turkish detection using character analysis
+        turkish_chars = "çğıöşüÇĞİÖŞÜ"
+        turkish_char_count = sum(1 for char in text if char in turkish_chars)
+        turkish_ratio = turkish_char_count / len(text) if text else 0
+        
+        # If we detect Turkish characters or langid says Turkish, use Turkish
+        if turkish_char_count > 0 or code == "tr":
+            print(f"Turkish detected - chars: {turkish_char_count}, ratio: {turkish_ratio:.3f}, langid: {code}")
+            detected_lang = "tr"
+        elif code == "en" or confidence > -100:  # High confidence for other languages
+            detected_lang = language_map.get(code, "en")
+        else:
+            # Low confidence, use character-based heuristics
+            if any(char in "àáâãäåæçèéêëìíîïðñòóôõöøùúûüýþÿ" for char in text.lower()):
+                # Likely European language, keep the detected one if supported
+                detected_lang = language_map.get(code, "en")
+            else:
+                detected_lang = "en"  # Default to English
+            
+        print(f"Final language decision: {detected_lang}")
+        return detected_lang
+        
+    except Exception as e:
+        print(f"Language detection error: {e}, defaulting to English")
+        return "en"
 
 async def perform_final_verification(document_id: str) -> bool:
     """
@@ -252,8 +329,102 @@ async def background_index_verification(document_id: str):
         )
         print(f"Error verifying document {document_id}: {e}")  
 
+def smart_chunk_text_for_tts(text: str, max_chunk_size: int = 400) -> List[str]:
+    """
+    Intelligently split text into chunks for TTS processing, optimized for real-time playback.
+    Handles Unicode properly and ensures no encoding issues.
+    """
+    # Ensure input is a proper UTF-8 string
+    if isinstance(text, bytes):
+        text = text.decode('utf-8')
+    
+    # Clean and normalize the text
+    text = text.strip()
+    if not text:
+        return [""]
+    
+    if len(text) <= max_chunk_size:
+        return [text]
+    
+    # Split by sentences first, handling multiple sentence endings
+    import re
+    sentences = re.split(r'(?<=[.!?])\s+', text)
+    
+    chunks = []
+    current_chunk = ""
+    
+    for sentence in sentences:
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+            
+        # If adding this sentence would exceed limit, save current chunk and start new one
+        if current_chunk and len(current_chunk) + len(sentence) + 1 > max_chunk_size:
+            chunks.append(current_chunk.strip())
+            current_chunk = sentence
+        else:
+            # Add sentence to current chunk
+            if current_chunk:
+                current_chunk += " " + sentence
+            else:
+                current_chunk = sentence
+        
+        # If a single sentence is too long, split it by clauses
+        if len(current_chunk) > max_chunk_size:
+            # Split by commas, semicolons, or other natural breaks
+            parts = re.split(r'(?<=[,;:])\s+', current_chunk)
+            temp_chunk = ""
+            
+            for part in parts:
+                part = part.strip()
+                if not part:
+                    continue
+                    
+                if temp_chunk and len(temp_chunk) + len(part) + 1 > max_chunk_size:
+                    if temp_chunk.strip():
+                        chunks.append(temp_chunk.strip())
+                    temp_chunk = part
+                else:
+                    if temp_chunk:
+                        temp_chunk += " " + part
+                    else:
+                        temp_chunk = part
+            
+            current_chunk = temp_chunk
+    
+    # Add the last chunk if it exists and has content
+    if current_chunk and current_chunk.strip():
+        chunks.append(current_chunk.strip())
+    
+    # Filter out any empty chunks and ensure we have at least one chunk
+    chunks = [chunk for chunk in chunks if chunk.strip()]
+    if not chunks:
+        chunks = [text]
+    
+    # Ensure all chunks are proper UTF-8 strings
+    cleaned_chunks = []
+    for chunk in chunks:
+        if isinstance(chunk, bytes):
+            chunk = chunk.decode('utf-8')
+        cleaned_chunks.append(chunk)
+    
+    print(f"Split text into {len(cleaned_chunks)} chunks for TTS")
+    for i, chunk in enumerate(cleaned_chunks):
+        print(f"Chunk {i}: {chunk[:50]}..." + (f" (Turkish chars: {sum(1 for c in chunk if c in 'çğıöşüÇĞİÖŞÜ')})" if any(c in 'çğıöşüÇĞİÖŞÜ' for c in chunk) else ""))
+    
+    return cleaned_chunks
+
 dotenv.load_dotenv()
+
+# Ensure OpenAI client is configured properly
 openai.api_key = os.getenv("OPENAI_API_KEY")
+
+# Create OpenAI client with explicit configuration
+from openai import OpenAI
+openai_client = OpenAI(
+    api_key=os.getenv("OPENAI_API_KEY"),
+)
+
 MONGO_URI = os.getenv("MONGO_URI")
 
 #connecting db
@@ -270,18 +441,27 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
-        "http://localhost:3001",  # Add if needed
-        "http://127.0.0.1:3000"   # Add if needed
+        "http://localhost:3001",  
+        "http://127.0.0.1:3000"   
     ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+     expose_headers=[  # <-- ADD THIS
+        "X-Total-Chunks",
+        "X-Current-Chunk",
+        "X-Detected-Language",
+        "X-Chunk-Index",
+        "Content-Disposition",
+    ],
 )
 
 port = int(os.getenv("PORT", 8000))
 cost = CostProjection()
 
 USER_ID = 'user123'
+voice_model = "tts-1"
+text_model = "gpt-4o"
 
 @app.get("/")
 def read_root():
@@ -338,7 +518,7 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
                 "$vectorSearch": {
                     "queryVector": embedded_query,
                     "path": "embedding",
-                    "numCandidates": 100,
+                    "numCandidates": 50,
                     "limit": 10,
                     "index": "vector_index"  
                 }
@@ -355,7 +535,6 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
     document_context = "\n\n".join(top_chunks)
     
     response_lang = detect_language_name(query)
-    model = "gpt-4o"
     
     # Step 3: Build enhanced prompt with conversation history
     system_prompt = f"""
@@ -365,6 +544,7 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
     - Only pay attention to last questions language when you answer
     - Use the provided Document Context and Conversation History while you are answering.
     - Don't return the question you were asked.
+    - Don't answer the questions out of topic and kindly state that you can't answer that
     - If you can not answer the question with the inormation provided in Conversation History or Document Context, reply exactly: "I don't have information about this" in the same language as the question.
     - Do not mention sources or refer them like "Based on the resources provided".
     - You can engage casual conversation with the user 
@@ -382,8 +562,8 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
 
     # Step 4: Generate AI response
     try:
-        response = openai.chat.completions.create(
-            model=model,
+        response = openai_client.chat.completions.create(
+            model=text_model,
             messages=messages,
             temperature=0.4
         )
@@ -398,7 +578,7 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
         "content": query,
         "timestamp": datetime.now(timezone.utc),
         "token_count": cost.calculate_token(system_prompt) ,
-        "message_cost": cost.calculate_cost(system_prompt,model)
+        "message_cost": cost.calculate_cost(system_prompt,text_model)
         }
 
         #print(f"User message - Token count: {user_message['token_count']}, Cost: {user_message['message_cost']}")
@@ -414,7 +594,7 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
             "sources": top_chunks,  # Store the source chunks
             "timestamp": datetime.now(timezone.utc),
             "token_count": cost.calculate_token(answer),
-            "message_cost": cost.calculate_cost(answer, model)
+            "message_cost": cost.calculate_cost(answer, text_model)
         }
         
         #print(f"Assistant message - Token count: {assistant_message['token_count']}, Cost: {assistant_message['message_cost']}")
@@ -439,6 +619,86 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"OpenAI Chat Error: {e}")
+
+@app.post("/voice/text-to-speech/chunk/{chunk_index}")
+async def text_to_speech_chunk(chunk_index: int, request: TTSRequest):
+    """
+    Get a specific chunk of text for TTS - optimized for real-time streaming
+    """
+    try:
+        # Auto-detect language if not specified or set to 'auto'
+        if not request.language or request.language == 'auto':
+            detected_lang = detect_language_code(request.text)
+            print(f"Auto-detected language: {detected_lang} for text: {request.text[:50]}...")
+        else:
+            detected_lang = request.language
+            print(f"Using specified language: {detected_lang}")
+        
+        # Split text into optimal chunks for real-time playback
+        text_chunks = smart_chunk_text_for_tts(request.text, max_chunk_size=400)  # Larger chunks for better performance
+        
+        # Validate chunk index
+        if chunk_index >= len(text_chunks) or chunk_index < 0:
+            raise HTTPException(status_code=404, detail="Chunk not found")
+        
+        # Get the specific chunk
+        chunk_text = text_chunks[chunk_index]
+        
+        # Ensure chunk has content
+        if not chunk_text.strip():
+            raise HTTPException(status_code=400, detail="Empty chunk")
+        
+        # Use faster TTS model for real-time performance with language support
+        tts_params = {
+            "model": "tts-1",  # Faster model for real-time
+            "voice": request.voice,
+            "input": chunk_text,
+            "speed": max(0.25, min(4.0, request.speed)),
+            "response_format": "mp3"
+        }
+        
+        # Note: OpenAI TTS doesn't use language parameter like other models
+        # The voice model automatically handles pronunciation based on text content
+        print(f"Creating TTS with voice={request.voice}, detected_lang={detected_lang}")
+        
+        response = openai.audio.speech.create(**tts_params)
+        
+        def generate_audio():
+            try:
+                for chunk in response.iter_bytes(chunk_size=1024):
+                    if chunk:
+                        yield chunk
+            except Exception as e:
+                print(f"Error streaming chunk {chunk_index}: {e}")
+                raise
+        
+        return StreamingResponse(
+            generate_audio(),
+            media_type="audio/mpeg",
+            headers={
+                "Content-Disposition": f"attachment; filename=speech_chunk_{chunk_index}.mp3",
+                "X-Detected-Language": detected_lang,
+                "X-Chunk-Index": str(chunk_index),
+                "X-Current-Chunk": str(chunk_index),
+                "X-Total-Chunks": str(len(text_chunks)),
+                "Cache-Control": "no-cache"
+            }
+        )
+        
+    except openai.APIError as e:
+        error_message = str(e)
+        print(f"OpenAI TTS API Error for chunk {chunk_index}: {error_message}")
+        
+        if "invalid_request_error" in error_message.lower():
+            raise HTTPException(status_code=400, detail="Invalid text input or parameters")
+        elif "rate_limit_exceeded" in error_message.lower():
+            raise HTTPException(status_code=429, detail="Rate limit exceeded. Please try again later.")
+        else:
+            raise HTTPException(status_code=500, detail=f"TTS API error: {error_message}")
+    
+    except Exception as e:
+        print(f"Unexpected error processing chunk {chunk_index}: {e}")
+        raise HTTPException(status_code=500, detail=f"Text-to-speech chunk failed: {str(e)}")
  
 @app.post("/conversations")
 async def create_conversation(conversation: ConversationCreate):
@@ -602,7 +862,7 @@ async def transcribe_audio(
             if language and language != 'auto':
                 whisper_params["language"] = language
             
-            transcript = openai.audio.transcriptions.create(**whisper_params)
+            transcript = openai_client.audio.transcriptions.create(**whisper_params)
         
         # Extract information from the response
         transcribed_text = transcript.text
@@ -655,6 +915,33 @@ def test_cost_calculation():
         "test_query": test_query,
         "calculated_tokens": token_count,
         "calculated_cost": message_cost,
+        "timestamp": datetime.now(timezone.utc)
+    }
+
+@app.post("/test-language-detection")
+async def test_language_detection(request: dict):
+    """Test endpoint to verify language detection is working"""
+    text = request.get("text", "")
+    
+    if not text:
+        raise HTTPException(status_code=400, detail="Text is required")
+    
+    # Test language detection
+    detected_lang = detect_language_code(text)
+    lang_name = detect_language_name(text)
+    
+    # Get langid raw results for debugging
+    import langid
+    raw_code, confidence = langid.classify(text)
+    
+    return {
+        "message": "Language detection test",
+        "input_text": text,
+        "detected_language_code": detected_lang,
+        "detected_language_name": lang_name,
+        "raw_langid_code": raw_code,
+        "raw_langid_confidence": confidence,
+        "has_turkish_chars": any(char in "çğıöşüÇĞİÖŞÜ" for char in text),
         "timestamp": datetime.now(timezone.utc)
     }
     
@@ -757,137 +1044,3 @@ async def upload_document(file: UploadFile = File(...)):
             {"document_id": document_id},
             {"$set": {"status": "error", "error_message": str(e)}}
         )
-        
-        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
-
-@app.get("/documents")
-async def get_documents(skip: int = 0, limit:int = 20):
-    """
-    Get list of uploaded documents for the user
-    """
-    
-    cursor = db.documents.find(
-        {"user_id":USER_ID}
-    ).sort("uploaded_at",-1).skip(skip).limit(limit)
-    
-    documents = []
-    async for doc in cursor:
-        doc["_id"] = str(doc["_id"])
-        documents.append(doc)
-        
-    total_count = await db.documents.count_documents({"user_id": USER_ID})
-
-    return {
-        "documents": documents,
-        "total": total_count,
-        "skip": skip,
-        "limit": limit
-    }
-
-@app.delete("/documents/{document_id}")
-async def delete_document(document_id:str):
-    """
-    Delete a document and all chunks of it
-    """
-    
-    document = await db.documents.find_one({
-        "document_id": document_id, 
-        "user_id": USER_ID
-    })
-    
-    if not document:
-        raise HTTPException(status_code=404, detail="Document not found")
-    
-    # ensure both deletion succeed or both fail
-    async with await client.start_session() as session:
-        async with session.start_transaction():
-            # Delete all chunks from embeddings
-            chunks_result = await db.embeddings.delete_many(
-                {"document_id":document_id},
-                session= session
-            )
-            
-        # delete document record
-        doc_result = await db.documents.delete_one(
-            {"document_id":document_id},
-            session=session
-        )
-
-    return {
-        "success": True,
-        "deleted_document": True,
-        "deleted_chunks": chunks_result.deleted_count,
-        "filename": document["filename"]
-    }
-
-@app.get("/documents/{document_id}/status")
-async def get_document_status(document_id: str):
-    """
-    Get real-time status of a specific document
-    """
-    document = await db.documents.find_one({
-        "document_id": document_id,
-        "user_id": USER_ID
-    })
-    
-    if not document:
-        raise HTTPException(status_code=404, detail="Document not found")
-    
-    # Remove MongoDB ObjectId for JSON serialization
-    document["_id"] = str(document["_id"])
-    
-    # Add additional status information
-    status_info = {
-        "document_id": document_id,
-        "filename": document["filename"],
-        "status": document["status"],
-        "uploaded_at": document["uploaded_at"],
-        "processed_at": document.get("processed_at"),
-        "chunks_count": document.get("chunks_count", 0),
-        "error_message": document.get("error_message"),
-        "file_size": document["file_size"]
-    }
-    
-    # If still processing, check how many chunks are already indexed
-    if document["status"] in ["processing", "processing_index"]:
-        chunk_count = await db.embeddings.count_documents({"document_id": document_id})
-        status_info["current_chunks"] = chunk_count
-        
-        # Estimate progress if we know expected chunks
-        if document.get("chunks_count"):
-            status_info["progress_percentage"] = min(100, (chunk_count / document["chunks_count"]) * 100)
-    
-    return status_info  
-
-@app.get("/documents/status/summary")
-async def get_documents_status_summary():
-    """
-    Get summary of all document statuses for the user
-    """
-    pipeline = [
-        {"$match": {"user_id": USER_ID}},
-        {"$group": {
-            "_id": "$status",
-            "count": {"$sum": 1}
-        }}
-    ]
-    
-    status_counts = {}
-    async for result in db.documents.aggregate(pipeline):
-        status_counts[result["_id"]] = result["count"]
-    
-    # Get recent processing documents
-    recent_processing = await db.documents.find({
-        "user_id": USER_ID,
-        "status": {"$in": ["processing", "processing_index"]},
-        "uploaded_at": {"$gte": datetime.now(timezone.utc) - timedelta(hours=1)}
-    }).sort("uploaded_at", -1).limit(5).to_list(length=None)
-    
-    for doc in recent_processing:
-        doc["_id"] = str(doc["_id"])
-    
-    return {
-        "status_summary": status_counts,
-        "recent_processing": recent_processing,
-        "total_documents": sum(status_counts.values())
-    }
