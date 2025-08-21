@@ -1057,7 +1057,7 @@ const loadMessages = async (conversationId) => {
             <div className="logo">
               <Database size={32} color="white" />
             </div>
-            <h1 className="title">Document Assistant</h1>
+            <h1 className="title"> Ecore Support Assistant</h1>
             <div className="header-controls">
               {/* Global speech control */}
               {isSpeaking && (
@@ -1082,11 +1082,10 @@ const loadMessages = async (conversationId) => {
       </header>
 
       <div className="container">
-        <div className="chat-layout">
+        <div className="three-column-layout">
           
-          {/* Sidebar - Conversations List */}
-          <div className="sidebar">
-            <DocumentUploadPanel />
+          {/* Left Sidebar - Conversations List */}
+          <div className="left-sidebar">
             <div className="sidebar-header">
               <h3>Conversations</h3>
               <button 
@@ -1153,14 +1152,14 @@ const loadMessages = async (conversationId) => {
             </div>
           </div>
 
-          {/* Chat Container */}
-          <div className="chat-container">
+          {/* Center - Chat Container */}
+          <div className="center-chat">
             
             {/* Chat Header */}
             <div className="chat-header">
               <div>
                 <h2 className="chat-title">
-                  {currentConversation ? currentConversation.title : 'Document Assistant'}
+                  {currentConversation ? currentConversation.title : 'Ecore Support Assistant'}
                 </h2>
                 <p className="chat-subtitle">
                   {currentConversation 
@@ -1214,7 +1213,7 @@ const loadMessages = async (conversationId) => {
               {!currentConversation ? (
                 <div className="welcome-message">
                   <Database size={48} color="#9ca3af" />
-                  <h3>Welcome to Document Assistant</h3>
+                  <h3>Welcome to Ecore Support Assistant</h3>
                   <p>Create a new conversation to start chatting with your documents.</p>
                   {(voiceSupported || webSpeechSupported) && (
                     <p className="voice-hint">
@@ -1225,7 +1224,7 @@ const loadMessages = async (conversationId) => {
                   {ttsSettings.enabled && (
                     <p className="voice-hint">
                       <Volume2 size={16} />
-                      Fast text-to-speech enabled! Assistant responses can be read aloud.
+                      Text-to-speech enabled! Assistant responses can be read aloud.
                     </p>
                   )}
                   
@@ -1452,6 +1451,11 @@ const loadMessages = async (conversationId) => {
                 </button>
               </div>
             </div>
+          </div>
+
+          {/* Right Sidebar - Document Upload Panel */}
+          <div className="right-sidebar">
+            <DocumentUploadPanel />
           </div>
         </div>
       </div>

@@ -509,11 +509,15 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
         chat_history.append({"role": role, "content": [{"type": "text", "text": msg["content"]}]})
     
     conversation_context = prompt.extract_conversation_context(chat_history=chat_history)
-    # print(f"CONTEXT-> {conversation_context}")
+    print(f"CONTEXT-> {conversation_context}")
     
     # Step 2: Get relevant documents 
     multi_query = prompt.generate_multi_query(query)
     embedded_query = embedder.embed(multi_query)[0]
+    
+    #Enhancing query
+    enhanced_prompt = prompt.generate_enhanced_query(user_query=query,chat_history=conversation_context)
+    #print(f"ENHANCED PROMPT -> {enhanced_prompt}")
     
     try:
         results = await collection.aggregate([
@@ -522,7 +526,7 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
                     "queryVector": embedded_query,
                     "path": "embedding",
                     "numCandidates": 50,
-                    "limit": 10,
+                    "limit": 5,
                     "index": "vector_index"  
                 }
             }
@@ -567,7 +571,7 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
         response = openai_client.chat.completions.create(
             model=text_model,
             messages=messages,
-            temperature=0.4
+            temperature=0.3
         )
         answer = response.choices[0].message.content
         

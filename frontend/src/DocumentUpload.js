@@ -23,8 +23,9 @@ const DocumentUploadPanel = () => {
   const [isLoadingDocs, setIsLoadingDocs] = useState(false);
   const fileInputRef = useRef(null);
 
-  // Status polling for processing documents
-  const [statusPolling, setStatusPolling] = useState(new Map());
+  // Fixed status polling with better management
+  const statusPollingRef = useRef(new Map());
+  const pollingCountRef = useRef(new Map());
 
   // Load documents from backend on component mount
   const loadDocumentsFromBackend = async () => {
@@ -45,7 +46,7 @@ const DocumentUploadPanel = () => {
           currentChunks: doc.current_chunks || 0,
           error: doc.error_message,
           document_id: doc.document_id,
-          progressPercentage: doc.progress_percentage || 0
+          progressPercentage: getProgressPercentage(doc.status)
         }));
         
         setUploadedFiles(backendDocs);
@@ -56,7 +57,7 @@ const DocumentUploadPanel = () => {
         );
         
         processingDocs.forEach(doc => {
-          startStatusPolling(doc.document_id, doc.id, doc.name);
+          startStatusPolling(doc.document_id, doc.name);
         });
       }
     } catch (error) {
@@ -67,89 +68,78 @@ const DocumentUploadPanel = () => {
     }
   };
 
-  // Enhanced status polling with better intervals
-  const startStatusPolling = (documentId, fileId, fileName) => {
-    if (statusPolling.has(documentId)) {
-      return; // Already polling this document
+  // Helper function to get progress percentage based on status
+  const getProgressPercentage = (status) => {
+    switch (status) {
+      case 'uploading': return 20;
+      case 'processing': return 50;
+      case 'processing_index': return 80;
+      case 'ready': return 100;
+      case 'error': return 0;
+      default: return 0;
     }
+  };
 
-    let pollCount = 0;
-    const maxPolls = 120; // 5 minutes max (120 * 2.5s average)
+  // Fixed status polling with proper cleanup and no recursion
+  const startStatusPolling = (documentId, fileName) => {
+    // Stop any existing polling for this document
+    stopPollingForDocument(documentId);
     
-    const pollInterval = setInterval(async () => {
+    console.log(`Starting status polling for document: ${documentId} (${fileName})`);
+    
+    // Initialize poll count
+    pollingCountRef.current.set(documentId, 0);
+    
+    const pollDocument = async () => {
       try {
-        pollCount++;
+        const currentPollCount = pollingCountRef.current.get(documentId) || 0;
+        pollingCountRef.current.set(documentId, currentPollCount + 1);
         
-        // Use exponential backoff for polling frequency
-        const baseInterval = 2500; // 2.5 seconds
-        const backoffMultiplier = Math.min(pollCount / 10, 3); // Max 3x slower
+        console.log(`Polling document ${documentId} - attempt ${currentPollCount + 1}`);
         
         const response = await fetch(`http://127.0.0.1:8000/documents/${documentId}/status`);
-        const statusData = await response.json();
         
-        if (response.ok) {
-          // Update the file status
-          setUploadedFiles(prev => prev.map(f => 
-            f.id === fileId 
-              ? { 
-                  ...f, 
-                  status: statusData.status,
-                  processedAt: statusData.processed_at ? new Date(statusData.processed_at) : null,
-                  chunks: statusData.chunks_count || f.chunks,
-                  currentChunks: statusData.current_chunks || 0,
-                  error: statusData.error_message,
-                  progressPercentage: statusData.progress_percentage || 0
-                }
-              : f
-          ));
-          
-          // Stop polling if document is ready or has error
-          if (statusData.status === 'ready') {
-            clearInterval(pollInterval);
-            setStatusPolling(prev => {
-              const newMap = new Map(prev);
-              newMap.delete(documentId);
-              return newMap;
-            });
-            
-            showNotification(`${fileName} is ready for Q&A!`, 'success');
-            
-          } else if (statusData.status === 'error') {
-            clearInterval(pollInterval);
-            setStatusPolling(prev => {
-              const newMap = new Map(prev);
-              newMap.delete(documentId);
-              return newMap;
-            });
-            
-            showNotification(`Failed to process ${fileName}: ${statusData.error_message}`, 'error');
-          }
-          
-          // Dynamic interval adjustment
-          clearInterval(pollInterval);
-          if (statusData.status === 'processing' || statusData.status === 'processing_index') {
-            setTimeout(() => {
-              if (pollCount < maxPolls) {
-                startStatusPolling(documentId, fileId, fileName);
-              }
-            }, baseInterval * backoffMultiplier);
-          }
-          
-        } else {
-          console.error('Failed to get document status:', response.statusText);
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         }
         
-        // Stop polling after max attempts
-        if (pollCount >= maxPolls) {
-          clearInterval(pollInterval);
-          setStatusPolling(prev => {
-            const newMap = new Map(prev);
-            newMap.delete(documentId);
-            return newMap;
-          });
+        const statusData = await response.json();
+        console.log(`Status for ${documentId}:`, statusData);
+        
+        // Update the file status in state
+        setUploadedFiles(prev => prev.map(f => 
+          f.document_id === documentId 
+            ? { 
+                ...f, 
+                status: statusData.status,
+                processedAt: statusData.processed_at ? new Date(statusData.processed_at) : null,
+                chunks: statusData.chunks_count || f.chunks,
+                currentChunks: statusData.current_chunks || 0,
+                error: statusData.error_message,
+                progressPercentage: getProgressPercentage(statusData.status)
+              }
+            : f
+        ));
+        
+        // Check if we should stop polling
+        if (statusData.status === 'ready') {
+          console.log(`Document ${documentId} is ready, stopping polling`);
+          stopPollingForDocument(documentId);
+          showNotification(`${fileName} is ready for Q&A!`, 'success');
+          return; // Stop polling
+          
+        } else if (statusData.status === 'error') {
+          console.log(`Document ${documentId} failed, stopping polling`);
+          stopPollingForDocument(documentId);
+          showNotification(`Failed to process ${fileName}: ${statusData.error_message}`, 'error');
+          return; // Stop polling
+          
+        } else if (currentPollCount >= 60) { // Max 5 minutes (60 * 5s)
+          console.log(`Document ${documentId} polling timeout`);
+          stopPollingForDocument(documentId);
           
           setUploadedFiles(prev => prev.map(f => 
-            f.id === fileId 
+            f.document_id === documentId 
               ? { 
                   ...f, 
                   status: 'error',
@@ -158,32 +148,67 @@ const DocumentUploadPanel = () => {
               : f
           ));
           showNotification(`Processing timeout for ${fileName}`, 'error');
+          return; // Stop polling
+        }
+        
+        // Continue polling if still processing
+        if (statusData.status === 'processing' || statusData.status === 'processing_index') {
+          const timeoutId = setTimeout(pollDocument, 5000); // 5 second intervals
+          statusPollingRef.current.set(documentId, timeoutId);
         }
         
       } catch (error) {
-        console.error('Status polling error:', error);
+        console.error(`Status polling error for ${documentId}:`, error);
         
-        // Stop polling on repeated errors
-        if (pollCount > 5) {
-          clearInterval(pollInterval);
-          setStatusPolling(prev => {
-            const newMap = new Map(prev);
-            newMap.delete(documentId);
-            return newMap;
-          });
+        const currentPollCount = pollingCountRef.current.get(documentId) || 0;
+        
+        // Stop polling on repeated errors (after 3 attempts)
+        if (currentPollCount > 3) {
+          console.log(`Too many errors for ${documentId}, stopping polling`);
+          stopPollingForDocument(documentId);
+          
+          setUploadedFiles(prev => prev.map(f => 
+            f.document_id === documentId 
+              ? { 
+                  ...f, 
+                  status: 'error',
+                  error: 'Failed to check status - please refresh'
+                }
+              : f
+          ));
+          showNotification(`Failed to check status for ${fileName}`, 'error');
+        } else {
+          // Retry after a longer delay on error
+          const timeoutId = setTimeout(pollDocument, 10000); // 10 second delay on error
+          statusPollingRef.current.set(documentId, timeoutId);
         }
       }
-    }, 2500); // Initial 2.5 second interval
+    };
     
-    setStatusPolling(prev => new Map(prev).set(documentId, pollInterval));
+    // Start polling immediately
+    pollDocument();
   };
 
-  // Cleanup polling on component unmount
+  // Helper function to stop polling for a specific document
+  const stopPollingForDocument = (documentId) => {
+    const timeoutId = statusPollingRef.current.get(documentId);
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+      statusPollingRef.current.delete(documentId);
+    }
+    pollingCountRef.current.delete(documentId);
+    console.log(`Stopped polling for document: ${documentId}`);
+  };
+
+  // Cleanup all polling on component unmount
   useEffect(() => {
     return () => {
-      statusPolling.forEach(interval => clearInterval(interval));
+      console.log('Cleaning up all status polling');
+      statusPollingRef.current.forEach(timeoutId => clearTimeout(timeoutId));
+      statusPollingRef.current.clear();
+      pollingCountRef.current.clear();
     };
-  }, [statusPolling]);
+  }, []);
 
   // Load documents when component mounts
   useEffect(() => {
@@ -208,9 +233,12 @@ const DocumentUploadPanel = () => {
   };
 
   const handleFileSelect = (files) => {
-    Array.from(files).forEach(file => {
+    const fileArray = Array.from(files);
+    console.log(`Starting upload for ${fileArray.length} files`);
+    
+    fileArray.forEach((file, index) => {
       const newFile = {
-        id: Date.now() + Math.random(),
+        id: Date.now() + Math.random() + index, // Ensure unique IDs
         name: file.name,
         size: file.size,
         status: 'uploading',
@@ -220,61 +248,69 @@ const DocumentUploadPanel = () => {
       
       setUploadedFiles(prev => [newFile, ...prev]);
       
-      // Real upload to backend
-      const uploadFile = async (file, fileId) => {
-        try {
-          const formData = new FormData();
-          formData.append('file', file);
-          
-          const response = await fetch('http://127.0.0.1:8000/upload-document', {
-            method: 'POST',
-            body: formData,
-          });
-          
-          const result = await response.json();
-          
-          if (response.ok && result.success) {
-            // Update file status to processing
-            setUploadedFiles(prev => prev.map(f => 
-              f.id === fileId 
-                ? { 
-                    ...f, 
-                    status: result.status,
-                    chunks: result.chunks_created,
-                    document_id: result.document_id,
-                    progressPercentage: 25 // Upload complete, processing started
-                  }
-                : f
-            ));
-            
-            showNotification(`${file.name} uploaded successfully. Processing...`, 'info');
-            
-            // Start enhanced status polling
-            startStatusPolling(result.document_id, fileId, file.name);
-            
-          } else {
-            throw new Error(result.detail || 'Upload failed');
-          }
-        } catch (error) {
-          console.error('Upload error:', error);
-          
-          setUploadedFiles(prev => prev.map(f => 
-            f.id === fileId 
-              ? { 
-                  ...f, 
-                  status: 'error', 
-                  error: error.message
-                }
-              : f
-          ));
-          
-          showNotification(`Failed to upload ${file.name}: ${error.message}`, 'error');
-        }
-      };
-
-      // Call the upload function
-      uploadFile(file, newFile.id);
+      // Upload file with delay to prevent overwhelming the server
+      setTimeout(() => {
+        uploadFile(file, newFile.id);
+      }, index * 500); // 500ms delay between uploads
     });
+  };
+
+  // Separate upload function for better error handling
+  const uploadFile = async (file, fileId) => {
+    try {
+      console.log(`Uploading file: ${file.name} (ID: ${fileId})`);
+      
+      const formData = new FormData();
+      formData.append('file', file);
+      
+      const response = await fetch('http://127.0.0.1:8000/upload-document', {
+        method: 'POST',
+        body: formData,
+      });
+      
+      const result = await response.json();
+      
+      if (response.ok && result.success) {
+        console.log(`Upload successful for ${file.name}:`, result);
+        
+        // Update file status to processing
+        setUploadedFiles(prev => prev.map(f => 
+          f.id === fileId 
+            ? { 
+                ...f, 
+                status: result.status,
+                chunks: result.chunks_created,
+                document_id: result.document_id,
+                progressPercentage: getProgressPercentage(result.status)
+              }
+            : f
+        ));
+        
+        showNotification(`${file.name} uploaded successfully. Processing...`, 'info');
+        
+        // Start status polling with a small delay
+        setTimeout(() => {
+          startStatusPolling(result.document_id, file.name);
+        }, 1000);
+        
+      } else {
+        throw new Error(result.detail || 'Upload failed');
+      }
+    } catch (error) {
+      console.error(`Upload error for ${file.name}:`, error);
+      
+      setUploadedFiles(prev => prev.map(f => 
+        f.id === fileId 
+          ? { 
+              ...f, 
+              status: 'error', 
+              error: error.message
+            }
+          : f
+      ));
+      
+      showNotification(`Failed to upload ${file.name}: ${error.message}`, 'error');
+    }
   };
 
   const handleDragOver = (e) => {
@@ -306,14 +342,7 @@ const DocumentUploadPanel = () => {
     try {
       if (documentId) {
         // Stop polling for this document
-        if (statusPolling.has(documentId)) {
-          clearInterval(statusPolling.get(documentId));
-          setStatusPolling(prev => {
-            const newMap = new Map(prev);
-            newMap.delete(documentId);
-            return newMap;
-          });
-        }
+        stopPollingForDocument(documentId);
 
         const response = await fetch(`http://127.0.0.1:8000/documents/${documentId}`, {
           method: 'DELETE'
@@ -338,21 +367,25 @@ const DocumentUploadPanel = () => {
     if (!file) return;
 
     try {
-      // First delete the existing document if it exists
+      // Stop any existing polling
       if (documentId) {
+        stopPollingForDocument(documentId);
+        
+        // Delete the existing document
         await fetch(`http://127.0.0.1:8000/documents/${documentId}`, {
           method: 'DELETE'
         });
       }
 
-      // Reset status to uploading and show retry message
+      // Reset status and show retry message
       setUploadedFiles(prev => prev.map(f => 
         f.id === fileId 
           ? { 
               ...f, 
               status: 'processing', 
               error: null,
-              progressPercentage: 0
+              progressPercentage: 0,
+              document_id: null
             }
           : f
       ));
@@ -366,20 +399,25 @@ const DocumentUploadPanel = () => {
   };
 
   const refreshDocuments = async () => {
+    // Stop all current polling
+    statusPollingRef.current.forEach(timeoutId => clearTimeout(timeoutId));
+    statusPollingRef.current.clear();
+    pollingCountRef.current.clear();
+    
     await loadDocumentsFromBackend();
     showNotification('Documents refreshed', 'info');
   };
 
   const showNotification = (message, type = 'info') => {
     const notification = {
-      id: Date.now(),
+      id: Date.now() + Math.random(),
       message,
       type
     };
     
     setNotifications(prev => [...prev, notification]);
     
-    // Auto-remove notification after 5 seconds for non-error messages
+    // Auto-remove notification
     const autoRemoveTime = type === 'error' ? 8000 : 5000;
     setTimeout(() => {
       setNotifications(prev => prev.filter(n => n.id !== notification.id));
@@ -429,23 +467,12 @@ const DocumentUploadPanel = () => {
   const getProgressBar = (file) => {
     if (file.status === 'ready') return null;
     
-    let progress = 0;
+    let progress = file.progressPercentage || 0;
     let color = '#3b82f6';
     
-    switch (file.status) {
-      case 'uploading':
-        progress = 20;
-        break;
-      case 'processing':
-        progress = file.progressPercentage || 40;
-        break;
-      case 'processing_index':
-        progress = 80;
-        break;
-      case 'error':
-        progress = 100;
-        color = '#ef4444';
-        break;
+    if (file.status === 'error') {
+      progress = 100;
+      color = '#ef4444';
     }
     
     return (
@@ -492,377 +519,166 @@ const DocumentUploadPanel = () => {
         </div>
       )}
 
-      <div className="document-upload-panel">
-        {/* Enhanced Panel Header */}
-        <div 
-          className="upload-panel-header"
-          onClick={() => setIsExpanded(!isExpanded)}
-        >
-          <div className="upload-panel-header-content">
-            <div className="upload-panel-info">
-              <Upload size={20} color="#3b82f6" />
-              <div>
-                <h3 className="upload-panel-title">My Documents</h3>
-                <p className="upload-panel-subtitle">
-                  {readyFilesCount} ready
-                  {processingFilesCount > 0 && `, ${processingFilesCount} processing`}
-                  {statusPolling.size > 0 && ` • ${statusPolling.size} monitored`}
-                </p>
-              </div>
+      <div className="document-upload-panel-sidebar">
+        {/* Compact Panel Header for Sidebar */}
+        <div className="upload-panel-header-sidebar">
+          <div className="upload-panel-info-sidebar">
+            <Upload size={18} color="#3b82f6" />
+            <div>
+              <h3 className="upload-panel-title-sidebar">Documents</h3>
+              <p className="upload-panel-subtitle-sidebar">
+                {readyFilesCount} ready
+                {processingFilesCount > 0 && `, ${processingFilesCount} processing`}
+              </p>
             </div>
-            <div className="header-controls">
-              {isLoadingDocs && <Clock size={16} className="animate-spin" />}
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  refreshDocuments();
-                }}
-                className="refresh-button"
-                title="Refresh documents"
-              >
-                <RefreshCw size={16} />
-              </button>
-              {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-            </div>
+          </div>
+          <div className="header-controls">
+            {isLoadingDocs && <Clock size={14} className="animate-spin" />}
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                refreshDocuments();
+              }}
+              className="refresh-button"
+              title="Refresh documents"
+            >
+              <RefreshCw size={14} />
+            </button>
           </div>
         </div>
 
-        {/* Expandable Content */}
-        {isExpanded && (
-          <div className="upload-panel-content">
-            {/* Upload Area */}
-            <div
-              className={`upload-area ${isDragging ? 'upload-area-dragging' : ''}`}
-              onDragOver={handleDragOver}
-              onDragLeave={handleDragLeave}
-              onDrop={handleDrop}
+        {/* Always Visible Content */}
+        <div className="upload-panel-content-sidebar">
+          {/* Compact Upload Area */}
+          <div
+            className={`upload-area-sidebar ${isDragging ? 'upload-area-dragging' : ''}`}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+          >
+            <Upload size={24} color={isDragging ? '#3b82f6' : '#9ca3af'} />
+            <p className="upload-area-title-sidebar">
+              {isDragging ? 'Drop here' : 'Upload your files to database'}
+            </p>
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="upload-choose-button-sidebar"
             >
-              <Upload size={32} color={isDragging ? '#3b82f6' : '#9ca3af'} style={{ marginBottom: '8px' }} />
-              <p className="upload-area-title">
-                {isDragging ? 'Drop files here' : 'Upload documents'}
-              </p>
-              <p className="upload-area-subtitle">
-                PDF, TXT, CSV, HTML files up to 25MB
-              </p>
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                className="upload-choose-button"
-              >
-                Choose Files
-              </button>
-              <input
-                ref={fileInputRef}
-                type="file"
-                multiple
-                accept=".pdf,.txt,.csv,.html,.htm,.docx"
-                onChange={handleFileInputChange}
-                style={{ display: 'none' }}
-              />
-            </div>
-
-            {/* Enhanced Files List */}
-            {uploadedFiles.length > 0 && (
-              <div className="files-list-container">
-                <h4 className="files-list-title">
-                  Uploaded Files ({uploadedFiles.length})
-                </h4>
-                <div className="files-list">
-                  {uploadedFiles.map((file) => (
-                    <div key={file.id} className={`file-item ${file.status}`}>
-                      <div className="file-item-content">
-                        <div className="file-item-info">
-                          <File size={16} color="#9ca3af" style={{ marginTop: '2px', flexShrink: 0 }} />
-                          <div className="file-details">
-                            <p className="file-name">{file.name}</p>
-                            <div className="file-status">
-                              {getStatusIcon(file)}
-                              <span className="file-status-text">
-                                {getStatusText(file)}
-                              </span>
-                            </div>
-                            
-                            {/* Enhanced Progress Bar */}
-                            {getProgressBar(file)}
-                            
-                            <p className="file-meta">
-                              {formatFileSize(file.size)} • {formatDate(file.uploadedAt)}
-                              {file.processedAt && (
-                                <span> • Completed {formatDate(file.processedAt)}</span>
-                              )}
-                            </p>
-                            
-                            {/* Error message */}
-                            {file.status === 'error' && (
-                              <p className="file-error">{file.error}</p>
-                            )}
-                            
-                            {/* Processing details */}
-                            {(file.status === 'processing' || file.status === 'processing_index') && (
-                              <div className="processing-details">
-                                {file.currentChunks > 0 && (
-                                  <span className="chunk-progress">
-                                    {file.currentChunks}/{file.chunks || '?'} chunks processed
-                                  </span>
-                                )}
-                                {statusPolling.has(file.document_id) && (
-                                  <span className="monitoring-indicator">
-                                    • Monitoring status
-                                  </span>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                        
-                        {/* Enhanced Action buttons */}
-                        <div className="file-actions">
-                          {file.status === 'error' && (
-                            <button
-                              onClick={() => retryProcessing(file.id, file.document_id)}
-                              className="file-action-button retry-button"
-                              title="Retry processing"
-                            >
-                              <RefreshCw size={14} />
-                            </button>
-                          )}
-                          <button
-                            onClick={() => deleteFile(file.id, file.document_id)}
-                            className="file-action-button delete-button"
-                            title="Delete file"
-                          >
-                            <Trash2 size={14} />
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Enhanced Summary */}
-            {uploadedFiles.length > 0 && (
-              <div className="upload-summary">
-                <div className="upload-summary-content">
-                  <div className="summary-stats">
-                    <div className="stat-item">
-                      <CheckCircle size={16} color="#10b981" />
-                      <span><strong>{readyFilesCount}</strong> ready for Q&A</span>
-                    </div>
-                    
-                    {processingFilesCount > 0 && (
-                      <div className="stat-item">
-                        <Clock size={16} color="#3b82f6" className="animate-spin" />
-                        <span><strong>{processingFilesCount}</strong> processing</span>
-                      </div>
-                    )}
-                    
-                    {statusPolling.size > 0 && (
-                      <div className="stat-item">
-                        <Database size={16} color="#6b7280" />
-                        <span><strong>{statusPolling.size}</strong> monitored</span>
-                      </div>
-                    )}
-                  </div>
-                  
-                  {processingFilesCount > 0 && (
-                    <div className="processing-notice">
-                      <p className="processing-text">
-                        Documents are being indexed for search. This may take 1-3 minutes per document.
-                      </p>
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-            
-            {/* No documents state */}
-            {uploadedFiles.length === 0 && !isLoadingDocs && (
-              <div className="no-documents">
-                <FileText size={32} color="#9ca3af" />
-                <p>No documents uploaded yet</p>
-                <p className="no-documents-hint">
-                  Upload your first document to start asking questions
-                </p>
-              </div>
-            )}
+              Choose Files
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept=".pdf,.txt,.csv,.html,.htm,.docx"
+              onChange={handleFileInputChange}
+              style={{ display: 'none' }}
+            />
           </div>
-        )}
+
+          {/* Compact Files List */}
+          {uploadedFiles.length > 0 && (
+            <div className="files-list-container-sidebar">
+              <h4 className="files-list-title-sidebar">
+                Files ({uploadedFiles.length})
+              </h4>
+              <div className="files-list-sidebar">
+                {uploadedFiles.map((file) => (
+                  <div key={file.id} className={`file-item-sidebar ${file.status}`}>
+                    <div className="file-item-content-sidebar">
+                      <div className="file-item-main-sidebar">
+                        <div className="file-icon-status-sidebar">
+                          {getStatusIcon(file)}
+                        </div>
+                        <div className="file-details-sidebar">
+                          <p className="file-name-sidebar" title={file.name}>
+                            {file.name.length > 25 ? file.name.substring(0, 25) + "..." : file.name}
+                          </p>
+                          <div className="file-status-sidebar">
+                            <span className="file-status-text-sidebar">
+                              {getStatusText(file)}
+                            </span>
+                          </div>
+                          
+                          {/* Compact Progress Bar */}
+                          {getProgressBar(file)}
+                          
+                          <p className="file-meta-sidebar">
+                            {formatFileSize(file.size)}
+                          </p>
+                          
+                          {/* Error message */}
+                          {file.status === 'error' && (
+                            <p className="file-error-sidebar">{file.error}</p>
+                          )}
+                        </div>
+                      </div>
+                      
+                      {/* Compact Action buttons */}
+                      <div className="file-actions-sidebar">
+                        {file.status === 'error' && (
+                          <button
+                            onClick={() => retryProcessing(file.id, file.document_id)}
+                            className="file-action-button-sidebar retry-button"
+                            title="Retry processing"
+                          >
+                            <RefreshCw size={12} />
+                          </button>
+                        )}
+                        <button
+                          onClick={() => deleteFile(file.id, file.document_id)}
+                          className="file-action-button-sidebar delete-button"
+                          title="Delete file"
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Compact Summary */}
+          {uploadedFiles.length > 0 && (
+            <div className="upload-summary-sidebar">
+              <div className="summary-stats-sidebar">
+                <div className="stat-item-sidebar">
+                  <CheckCircle size={14} color="#10b981" />
+                  <span>{readyFilesCount} ready</span>
+                </div>
+                
+                {processingFilesCount > 0 && (
+                  <div className="stat-item-sidebar">
+                    <Clock size={14} color="#3b82f6" className="animate-spin" />
+                    <span>{processingFilesCount} processing</span>
+                  </div>
+                )}
+              </div>
+              
+              {processingFilesCount > 0 && (
+                <div className="processing-notice-sidebar">
+                  <p className="processing-text-sidebar">
+                    Indexing documents for search...
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+          
+          {/* No documents state */}
+          {uploadedFiles.length === 0 && !isLoadingDocs && (
+            <div className="no-documents-sidebar">
+              <FileText size={24} color="#9ca3af" />
+              <p>No documents</p>
+              <p className="no-documents-hint-sidebar">
+                Upload your files in the field above
+              </p>
+            </div>
+          )}
+        </div>
       </div>
-
-      <style jsx>{`
-        .notifications-container {
-          position: fixed;
-          top: 20px;
-          right: 20px;
-          z-index: 1000;
-          display: flex;
-          flex-direction: column;
-          gap: 8px;
-        }
-
-        .notification {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          padding: 12px 16px;
-          border-radius: 8px;
-          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-          min-width: 300px;
-          animation: slideIn 0.3s ease-out;
-        }
-
-        .notification.success {
-          background-color: #10b981;
-          color: white;
-        }
-
-        .notification.error {
-          background-color: #ef4444;
-          color: white;
-        }
-
-        .notification.info {
-          background-color: #3b82f6;
-          color: white;
-        }
-
-        .notification-content {
-          display: flex;
-          align-items: center;
-          gap: 8px;
-        }
-
-        .notification-close {
-          background: none;
-          border: none;
-          color: inherit;
-          cursor: pointer;
-          padding: 4px;
-          border-radius: 4px;
-          opacity: 0.8;
-        }
-
-        .notification-close:hover {
-          opacity: 1;
-          background-color: rgba(255, 255, 255, 0.1);
-        }
-
-        .status-progress {
-          width: 100%;
-          height: 2px;
-          background-color: #e5e7eb;
-          border-radius: 1px;
-          margin: 4px 0;
-          overflow: hidden;
-        }
-
-        .status-progress-bar {
-          height: 100%;
-          transition: width 0.3s ease;
-          border-radius: 1px;
-        }
-
-        .processing-details {
-          font-size: 12px;
-          color: #6b7280;
-          margin-top: 4px;
-        }
-
-        .chunk-progress {
-          font-weight: 500;
-        }
-
-        .monitoring-indicator {
-          color: #3b82f6;
-        }
-
-        .header-controls {
-          display: flex;
-          align-items: center;
-          gap: 8px;
-        }
-
-        .refresh-button {
-          background: none;
-          border: none;
-          padding: 4px;
-          border-radius: 4px;
-          cursor: pointer;
-          color: #6b7280;
-          transition: all 0.2s;
-        }
-
-        .refresh-button:hover {
-          color: #3b82f6;
-          background-color: #f3f4f6;
-        }
-
-        .file-item.processing,
-        .file-item.processing_index {
-          border-left: 3px solid #3b82f6;
-          background-color: #f8fafc;
-        }
-
-        .file-item.ready {
-          border-left: 3px solid #10b981;
-        }
-
-        .file-item.error {
-          border-left: 3px solid #ef4444;
-          background-color: #fef2f2;
-        }
-
-        .summary-stats {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 16px;
-          margin-bottom: 8px;
-        }
-
-        .stat-item {
-          display: flex;
-          align-items: center;
-          gap: 6px;
-          font-size: 14px;
-        }
-
-        .processing-notice {
-          margin-top: 8px;
-          padding: 8px 12px;
-          background-color: #f0f9ff;
-          border-radius: 6px;
-          border-left: 3px solid #3b82f6;
-        }
-
-        .processing-text {
-          margin: 0;
-          font-size: 13px;
-          color: #1e40af;
-        }
-
-        .no-documents {
-          text-align: center;
-          padding: 32px 16px;
-          color: #6b7280;
-        }
-
-        .no-documents-hint {
-          font-size: 14px;
-          margin-top: 8px;
-        }
-
-        @keyframes slideIn {
-          from {
-            transform: translateX(100%);
-            opacity: 0;
-          }
-          to {
-            transform: translateX(0);
-            opacity: 1;
-          }
-        }
-      `}</style>
     </>
   );
 };
