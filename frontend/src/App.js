@@ -664,31 +664,61 @@ const DocumentAssistant = () => {
     }
   };
 
-  const loadMessages = async (conversationId) => {
-    try {
-      const response = await axios.get(`${API_BASE_URL}/conversations/${conversationId}/messages`);
-      const backendMessages = response.data.messages;
-      
-      const frontendMessages = backendMessages.map(msg => ({
+const loadMessages = async (conversationId) => {
+  try {
+    const response = await axios.get(`${API_BASE_URL}/conversations/${conversationId}/messages`);
+    const backendMessages = response.data.messages;
+    
+    const frontendMessages = backendMessages.map(msg => {
+      const mappedMessage = {
         id: msg._id || msg.message_id,
         type: msg.role,
         content: msg.content,
-        sources: msg.sources ? msg.sources.map((chunk, index) => ({
-          name: `Source ${index + 1}`,
-          snippet: chunk.length > 150 ? chunk.substring(0, 150) + "..." : chunk
-        })) : [],
+        sources: [], // Initialize empty
         timestamp: new Date(msg.timestamp),
         voiceMetadata: msg.voice_metadata,
         hasBeenSpoken: true
-      }));
-      
-      setMessages(frontendMessages);
-      setShouldAutoScroll(true);
-    } catch (error) {
-      console.error('Failed to load messages:', error);
-      setError('Failed to load conversation history');
-    }
-  };
+      };
+
+      // Handle sources more robustly
+      if (msg.sources && Array.isArray(msg.sources) && msg.sources.length > 0) {
+        mappedMessage.sources = msg.sources.map((chunk, index) => {
+          // Handle different source formats
+          if (typeof chunk === 'object' && chunk !== null) {
+            // If it's already a formatted source object
+            if (chunk.name && chunk.snippet) {
+              return chunk;
+            }
+            // If it's an object but not formatted, try to extract text
+            const chunkText = chunk.content || chunk.text || JSON.stringify(chunk);
+            return {
+              name: `Source ${index + 1}`,
+              snippet: chunkText.length > 150 ? chunkText.substring(0, 150) + "..." : chunkText
+            };
+          } else {
+            // Handle string chunks
+            const chunkText = String(chunk || '');
+            if (chunkText.trim()) {  // Only add non-empty sources
+              return {
+                name: `Source ${index + 1}`,
+                snippet: chunkText.length > 150 ? chunkText.substring(0, 150) + "..." : chunkText
+              };
+            }
+            return null;
+          }
+        }).filter(Boolean); // Remove null entries
+      }
+
+      return mappedMessage;
+    });
+    
+    setMessages(frontendMessages);
+    setShouldAutoScroll(true);
+  } catch (error) {
+    console.error('Failed to load messages:', error);
+    setError('Failed to load conversation history');
+  }
+};
 
   const createNewConversation = async (firstMessage = null) => {
     try {

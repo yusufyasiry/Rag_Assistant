@@ -447,7 +447,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-     expose_headers=[  # <-- ADD THIS
+     expose_headers=[  
         "X-Total-Chunks",
         "X-Current-Chunk",
         "X-Detected-Language",
@@ -509,7 +509,7 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
         chat_history.append({"role": role, "content": [{"type": "text", "text": msg["content"]}]})
     
     conversation_context = prompt.extract_conversation_context(chat_history=chat_history)
-    print(f"CONTEXT-> {conversation_context}")
+    # print(f"CONTEXT-> {conversation_context}")
     
     # Step 2: Get relevant documents 
     multi_query = prompt.generate_multi_query(query)
@@ -541,10 +541,9 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
     
     # Step 3: Build enhanced prompt with conversation history
     system_prompt = f"""
-    - You are a expert financial assistant.
+    - You are an expert assistant in finance and leasing procedures in particular.
     - When you receive a question answer in the same language that you were asked in. 
     - Ignore the language of document context and Conversation History.
-    - Only pay attention to last questions language when you answer
     - Use the provided Document Context and Conversation History while you are answering.
     - Don't return the question you were asked.
     - Don't answer the questions out of topic and kindly state that you can't answer that
@@ -1047,3 +1046,93 @@ async def upload_document(file: UploadFile = File(...)):
             {"document_id": document_id},
             {"$set": {"status": "error", "error_message": str(e)}}
         )
+
+@app.get("/documents")
+async def get_documents(user_id: str = USER_ID, skip: int = 0, limit: int = 50):
+    """
+    Get all documents for a user
+    """
+    cursor = db.documents.find({"user_id": user_id}).sort("uploaded_at", -1).skip(skip).limit(limit)
+    
+    documents = []
+    async for doc in cursor:
+        doc["_id"] = str(doc["_id"])
+        documents.append(doc)
+    
+    total_count = await db.documents.count_documents({"user_id": user_id})
+    
+    return {
+        "documents": documents,
+        "total": total_count,
+        "skip": skip,
+        "limit": limit
+    }
+
+@app.get("/documents/{document_id}/status")
+async def get_document_status(document_id: str):
+    """
+    Get the status of a specific document
+    """
+    document = await db.documents.find_one({"document_id": document_id})
+    
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    # Calculate progress percentage based on status
+    progress_percentage = 0
+    if document["status"] == "processing":
+        progress_percentage = 30
+    elif document["status"] == "processing_index":
+        progress_percentage = 70
+    elif document["status"] == "ready":
+        progress_percentage = 100
+    elif document["status"] == "error":
+        progress_percentage = 0
+    
+    return {
+        "document_id": document_id,
+        "status": document["status"],
+        "filename": document["filename"],
+        "uploaded_at": document["uploaded_at"],
+        "processed_at": document.get("processed_at"),
+        "chunks_count": document.get("chunks_count"),
+        "current_chunks": document.get("chunks_count", 0),  # For this simple case
+        "error_message": document.get("error_message"),
+        "progress_percentage": progress_percentage
+    }
+
+@app.delete("/documents/{document_id}")
+async def delete_document(document_id: str):
+    """
+    Delete a document and all its associated chunks
+    """
+    # Use transaction to ensure both document and embeddings are deleted
+    async with await client.start_session() as session:
+        async with session.start_transaction():
+            # Delete all embeddings for this document
+            embeddings_result = await db.embeddings.delete_many(
+                {"document_id": document_id},
+                session=session
+            )
+            
+            # Delete the document record
+            doc_result = await db.documents.delete_one(
+                {"document_id": document_id},
+                session=session
+            )
+            
+            if doc_result.deleted_count == 0:
+                raise HTTPException(status_code=404, detail="Document not found")
+    
+    return {
+        "success": True,
+        "deleted_document": True,
+        "deleted_chunks": embeddings_result.deleted_count,
+        "document_id": document_id
+    }        
+        
+        
+        
+        
+        
+        

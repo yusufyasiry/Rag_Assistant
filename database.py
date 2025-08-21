@@ -17,7 +17,7 @@ conversations = db["conversations"]
 
 
 loader = Loader()
-docs = loader.load_pdf("./data/leasing2.pdf")
+docs = loader.load_txt("./data/test.txt")
 texts = [doc.page_content for doc in docs]
 embedder = Embedder()
 embeddings = embedder.embed(texts)
@@ -25,7 +25,7 @@ embeddings = embedder.embed(texts)
 for doc, emb in zip(docs, embeddings):
     record = {
         "content": doc.page_content,
-        "embedding": emb,
+        "embedding": emb, 
         "metadata": doc.metadata  
     }
     collection.insert_one(record)
