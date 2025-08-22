@@ -61,7 +61,6 @@ class TTSRequest(BaseModel):
     text: str
     language: Optional[str] = None  # Auto-detect if not specified
     voice: str = "nova"  # OpenAI TTS voice
-    speed: float = 1.0
 
 
 def detect_language_name(text: str) -> str:
@@ -659,7 +658,7 @@ async def text_to_speech_chunk(chunk_index: int, request: TTSRequest):
             "model": "tts-1",  # Faster model for real-time
             "voice": request.voice,
             "input": chunk_text,
-            "speed": max(0.25, min(4.0, request.speed)),
+            "speed": 1.0,
             "response_format": "mp3"
         }
         

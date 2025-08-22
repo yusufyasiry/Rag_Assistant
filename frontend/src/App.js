@@ -38,8 +38,7 @@ const DocumentAssistant = () => {
   const [ttsSettings, setTtsSettings] = useState({
     enabled: true,
     autoSpeak: false,
-    voice: 'alloy',
-    speed: 1.0,
+    voice: 'nova',
     language: 'auto'
   });
 
@@ -184,7 +183,6 @@ const DocumentAssistant = () => {
       const ttsRequestBody = {
         text: text,
         voice: ttsSettings.voice,
-        speed: ttsSettings.speed,
       };
 
       // Only send language if it's not 'auto' - let backend handle auto-detection
@@ -274,7 +272,6 @@ const DocumentAssistant = () => {
             text: text,
             language: ttsSettings.language === 'auto' ? null : ttsSettings.language,
             voice: ttsSettings.voice,
-            speed: ttsSettings.speed,
           }),
           signal: abortControllerRef.current?.signal
         }).then(response => {
@@ -924,15 +921,6 @@ const loadMessages = async (conversationId) => {
                 <option value="auto">Auto-detect (Recommended)</option>
                 <option value="en">English</option>
                 <option value="tr">Türkçe</option>
-                <option value="de">Deutsch</option>
-                <option value="fr">Français</option>
-                <option value="es">Español</option>
-                <option value="it">Italiano</option>
-                <option value="pt">Português</option>
-                <option value="ru">Русский</option>
-                <option value="ja">日本語</option>
-                <option value="ko">한국어</option>
-                <option value="zh">中文</option>
               </select>
             </div>
           </div>
@@ -988,23 +976,6 @@ const loadMessages = async (conversationId) => {
             </div>
 
             <div className="setting-group">
-              <label>Speech Speed: {ttsSettings.speed.toFixed(1)}x</label>
-              <input
-                type="range"
-                min="0.25"
-                max="4.0"
-                step="0.25"
-                value={ttsSettings.speed}
-                onChange={(e) => setTtsSettings(prev => ({ ...prev, speed: parseFloat(e.target.value) }))}
-                className="setting-slider"
-                disabled={!ttsSettings.enabled}
-              />
-              <small className="setting-help">
-                Control how fast the speech is delivered (0.25x to 4.0x)
-              </small>
-            </div>
-
-            <div className="setting-group">
               <label>Speech Language</label>
               <select 
                 value={ttsSettings.language} 
@@ -1015,17 +986,6 @@ const loadMessages = async (conversationId) => {
                 <option value="auto">Auto-detect from text</option>
                 <option value="en">English</option>
                 <option value="tr">Türkçe</option>
-                <option value="de">Deutsch</option>
-                <option value="fr">Français</option>
-                <option value="es">Español</option>
-                <option value="it">Italiano</option>
-                <option value="pt">Português</option>
-                <option value="ru">Русский</option>
-                <option value="ja">日本語</option>
-                <option value="ko">한국어</option>
-                <option value="zh">中文</option>
-                <option value="ar">العربية</option>
-                <option value="hi">हिन्दी</option>
               </select>
               <small className="setting-help">
                 Choose language for speech synthesis or let it auto-detect
@@ -1214,7 +1174,7 @@ const loadMessages = async (conversationId) => {
                 <div className="welcome-message">
                   <Database size={48} color="#9ca3af" />
                   <h3>Welcome to Ecore Support Assistant</h3>
-                  <p>Create a new conversation to start chatting with your documents.</p>
+                  <p>Upload your documents from top right corner and start chatting with them. You can use your files accross multiple conversations.</p>
                   {(voiceSupported || webSpeechSupported) && (
                     <p className="voice-hint">
                       <Mic size={16} />
@@ -1240,7 +1200,7 @@ const loadMessages = async (conversationId) => {
                 <div className="welcome-message">
                   <MessageCircle size={48} color="#9ca3af" />
                   <h3>Start the Conversation</h3>
-                  <p>Ask me anything about your documents. I'll search through them and provide you with accurate answers.</p>
+                  <p>Upload your files from top right corner if you haven't already then ask me anything about your documents. I'll search through them and provide you with accurate answers.</p>
                   
                   {/* Quick suggestions */}
                   <div className="suggestions">
