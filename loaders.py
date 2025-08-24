@@ -24,7 +24,7 @@ class Loader:
     def load_pdf(self, file_path: str) -> list:
         loader = UnstructuredPDFLoader(file_path=file_path, mode="single")
         documents = loader.load()
-        return self._split_documents(documents)
+        return self._split_documents(documents) 
 
     def load_csv(self, file_path: str) -> list:
         loader = UnstructuredCSVLoader(file_path=file_path, mode="elements")

@@ -548,6 +548,7 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
     - When you receive a question answer in the same language that you were asked in. 
     - Ignore the language of document context and Conversation History.
     - Use the provided Document Context and Conversation History while you are answering.
+    - If the only document you see in Document Context is "This is a root doc for search index" this means user haven't uploaded any file yet. In this case DO NOT reply anything but "Please upload your files" in the response language.
     - Don't return the question you were asked.
     - Don't answer the questions out of topic and kindly state that you can't answer that
     - If you can not answer the question with the inormation provided in Conversation History or Document Context, reply exactly: "I don't have information about this" in the same language as the question.

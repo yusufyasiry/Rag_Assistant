@@ -904,7 +904,7 @@ const loadMessages = async (conversationId) => {
                 className="setting-select"
               >
                 <option value="whisper">Whisper API (Recommended)</option>
-                {webSpeechSupported && <option value="webspeech">Web Speech API (Fallback)</option>}
+                {webSpeechSupported}
               </select>
               <small className="setting-help">
                 Whisper provides better accuracy and auto-detects language.
@@ -919,8 +919,6 @@ const loadMessages = async (conversationId) => {
                 className="setting-select"
               >
                 <option value="auto">Auto-detect (Recommended)</option>
-                <option value="en">English</option>
-                <option value="tr">Türkçe</option>
               </select>
             </div>
           </div>
@@ -984,12 +982,7 @@ const loadMessages = async (conversationId) => {
                 disabled={!ttsSettings.enabled}
               >
                 <option value="auto">Auto-detect from text</option>
-                <option value="en">English</option>
-                <option value="tr">Türkçe</option>
               </select>
-              <small className="setting-help">
-                Choose language for speech synthesis or let it auto-detect
-              </small>
             </div>
           </div>
         </div>
