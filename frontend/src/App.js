@@ -22,13 +22,8 @@ const DocumentAssistant = () => {
   const [voiceSupported, setVoiceSupported] = useState(false);
   const [voiceLanguage, setVoiceLanguage] = useState('auto');
   const [detectedLanguage, setDetectedLanguage] = useState(null);
-  
-  // Web Speech API fallback states
-  const [webSpeechSupported, setWebSpeechSupported] = useState(false);
-  const [transcript, setTranscript] = useState('');
   const [confidence, setConfidence] = useState(0);
-  const [useWebSpeech, setUseWebSpeech] = useState(false);
-
+  
   // Enhanced TTS states
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isLoadingAudio, setIsLoadingAudio] = useState(false);
@@ -49,6 +44,24 @@ const DocumentAssistant = () => {
   const chunksQueueRef = useRef([]);
   const isPlayingChunksRef = useRef(false);
 
+  // Simplified auto-stop detection refs
+  const mediaRecorderRef = useRef(null);
+  const audioContextRef = useRef(null);
+  const analyserRef = useRef(null);
+  const microphoneRef = useRef(null);
+  const audioStreamRef = useRef(null);
+  const monitoringIntervalRef = useRef(null);
+  const autoStopTimeoutRef = useRef(null);
+  const recordingStartTimeRef = useRef(0);
+  const lastSpeechTimeRef = useRef(0);
+  const speechDetectedRef = useRef(false);
+
+  // Simplified and more reliable constants
+  const SILENCE_THRESHOLD = 1500; // 1.5 seconds of silence to auto-stop
+  const MIN_RECORDING_TIME = 800; // Minimum 0.8 seconds before allowing auto-stop
+  const ENERGY_THRESHOLD = 0.005; // Simplified energy threshold
+  const MIN_AUDIO_SIZE = 2000; // Minimum audio size in bytes (to avoid empty recordings)
+
   // Voice settings modal
   const [showVoiceSettings, setShowVoiceSettings] = useState(false);
 
@@ -56,9 +69,6 @@ const DocumentAssistant = () => {
   const messagesEndRef = useRef(null);
   const chatMessagesRef = useRef(null);
   const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
-
-  // Speech recognition ref for Web Speech API fallback
-  const recognitionRef = useRef(null);
   
   // API base URL
   const API_BASE_URL = process.env.REACT_APP_API_URL;
@@ -77,11 +87,6 @@ const DocumentAssistant = () => {
   const initializeVoiceCapabilities = async () => {
     if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder) {
       setVoiceSupported(true);
-    }
-
-    if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
-      setWebSpeechSupported(true);
-      initializeWebSpeechAPI();
     }
   };
 
@@ -156,6 +161,161 @@ const DocumentAssistant = () => {
         setIsSpeaking(true);
       };
     }
+  };
+
+  // Simplified and more reliable audio monitoring
+  const startAudioMonitoring = (stream) => {
+    try {
+      // Create audio context and analyser
+      const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      const analyser = audioContext.createAnalyser();
+      const microphone = audioContext.createMediaStreamSource(stream);
+      
+      // Configure analyser for speech detection
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.2;
+      
+      microphone.connect(analyser);
+      
+      // Store references
+      audioContextRef.current = audioContext;
+      analyserRef.current = analyser;
+      microphoneRef.current = microphone;
+      audioStreamRef.current = stream;
+      
+      // Reset detection variables
+      lastSpeechTimeRef.current = Date.now();
+      speechDetectedRef.current = false;
+      recordingStartTimeRef.current = Date.now();
+      
+      console.log('Audio monitoring started');
+      
+      // Start monitoring with interval
+      monitoringIntervalRef.current = setInterval(() => {
+        if (!isRecording || !analyserRef.current) {
+          clearInterval(monitoringIntervalRef.current);
+          return;
+        }
+        
+        checkForSpeech();
+      }, 100); // Check every 100ms
+      
+    } catch (error) {
+      console.error('Error starting audio monitoring:', error);
+      setError('Failed to setup audio monitoring');
+    }
+  };
+
+  const checkForSpeech = () => {
+    if (!analyserRef.current || !isRecording) return;
+    
+    const bufferLength = analyserRef.current.frequencyBinCount;
+    const dataArray = new Uint8Array(bufferLength);
+    analyserRef.current.getByteFrequencyData(dataArray);
+    
+    // Calculate average energy
+    let sum = 0;
+    for (let i = 0; i < bufferLength; i++) {
+      sum += (dataArray[i] / 255) * (dataArray[i] / 255);
+    }
+    const averageEnergy = Math.sqrt(sum / bufferLength);
+    
+    const currentTime = Date.now();
+    const recordingDuration = currentTime - recordingStartTimeRef.current;
+    
+    // Check if current energy indicates speech
+    const isSpeaking = averageEnergy > ENERGY_THRESHOLD;
+    
+    if (isSpeaking) {
+      lastSpeechTimeRef.current = currentTime;
+      if (!speechDetectedRef.current) {
+        speechDetectedRef.current = true;
+        console.log('Speech detected, energy:', averageEnergy.toFixed(4));
+      }
+      
+      // Clear any pending auto-stop
+      if (autoStopTimeoutRef.current) {
+        clearTimeout(autoStopTimeoutRef.current);
+        autoStopTimeoutRef.current = null;
+      }
+    } else {
+      // Check for silence conditions
+      const silenceDuration = currentTime - lastSpeechTimeRef.current;
+      
+      // Only auto-stop if:
+      // 1. We've been recording for minimum time
+      // 2. We detected speech before
+      // 3. We've had silence for the required duration
+      // 4. No pending auto-stop timeout
+      if (recordingDuration > MIN_RECORDING_TIME && 
+          speechDetectedRef.current && 
+          silenceDuration > SILENCE_THRESHOLD && 
+          !autoStopTimeoutRef.current) {
+        
+        console.log(`Auto-stopping after ${silenceDuration}ms of silence`);
+        
+        // Set a small timeout to prevent multiple rapid auto-stops
+        autoStopTimeoutRef.current = setTimeout(() => {
+          if (isRecording && mediaRecorderRef.current) {
+            console.log('Executing auto-stop');
+            stopRecording(true); // true indicates auto-stop
+          }
+        }, 100);
+      }
+    }
+  };
+
+  const cleanupAudioMonitoring = () => {
+    console.log('Cleaning up audio monitoring');
+    
+    // Clear monitoring interval
+    if (monitoringIntervalRef.current) {
+      clearInterval(monitoringIntervalRef.current);
+      monitoringIntervalRef.current = null;
+    }
+    
+    // Clear auto-stop timeout
+    if (autoStopTimeoutRef.current) {
+      clearTimeout(autoStopTimeoutRef.current);
+      autoStopTimeoutRef.current = null;
+    }
+    
+    // Disconnect and close audio context
+    if (microphoneRef.current) {
+      try {
+        microphoneRef.current.disconnect();
+      } catch (e) {
+        console.warn('Error disconnecting microphone:', e);
+      }
+      microphoneRef.current = null;
+    }
+    
+    if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+      try {
+        audioContextRef.current.close();
+      } catch (e) {
+        console.warn('Error closing audio context:', e);
+      }
+      audioContextRef.current = null;
+    }
+    
+    // Stop all audio tracks
+    if (audioStreamRef.current) {
+      audioStreamRef.current.getTracks().forEach(track => {
+        try {
+          track.stop();
+        } catch (e) {
+          console.warn('Error stopping audio track:', e);
+        }
+      });
+      audioStreamRef.current = null;
+    }
+    
+    // Reset detection state
+    analyserRef.current = null;
+    speechDetectedRef.current = false;
+    lastSpeechTimeRef.current = 0;
+    recordingStartTimeRef.current = 0;
   };
 
   // Fast chunked TTS with immediate start and auto language detection
@@ -369,62 +529,6 @@ const DocumentAssistant = () => {
     speakText(testText, 'test');
   };
 
-  const initializeWebSpeechAPI = () => {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    recognitionRef.current = new SpeechRecognition();
-    
-    const recognition = recognitionRef.current;
-    recognition.continuous = false;
-    recognition.interimResults = true;
-    recognition.lang = `${voiceLanguage}-${voiceLanguage === 'en' ? 'US' : voiceLanguage === 'tr' ? 'TR' : 'US'}`;
-
-    recognition.onstart = () => {
-      setIsRecording(true);
-      setError(null);
-      stopSpeaking();
-    };
-
-    recognition.onresult = (event) => {
-      let finalTranscript = '';
-      let interimTranscript = '';
-
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        const transcript = event.results[i][0].transcript;
-        if (event.results[i].isFinal) {
-          finalTranscript += transcript;
-          setConfidence(event.results[i][0].confidence);
-        } else {
-          interimTranscript += transcript;
-        }
-      }
-
-      if (finalTranscript) {
-        setQuery(prev => prev + finalTranscript);
-        setTranscript('');
-      } else {
-        setTranscript(interimTranscript);
-      }
-    };
-
-    recognition.onerror = (event) => {
-      console.error('Speech recognition error:', event.error);
-      setError(`Voice recognition error: ${event.error}`);
-      setIsRecording(false);
-    };
-
-    recognition.onend = () => {
-      setIsRecording(false);
-      setTranscript('');
-    };
-  };
-
-  // Update recognition language when voice language changes
-  useEffect(() => {
-    if (recognitionRef.current) {
-      recognitionRef.current.lang = `${voiceLanguage}-${voiceLanguage === 'en' ? 'US' : voiceLanguage === 'tr' ? 'TR' : 'US'}`;
-    }
-  }, [voiceLanguage]);
-
   // Auto-speak new assistant messages if enabled
   useEffect(() => {
     if (ttsSettings.autoSpeak && messages.length > 0) {
@@ -444,30 +548,57 @@ const DocumentAssistant = () => {
   }, [messages, ttsSettings.autoSpeak]);
 
   const cleanup = () => {
-    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-      mediaRecorder.stop();
-    }
-    if (recognitionRef.current) {
-      recognitionRef.current.stop();
-    }
+    cleanupAudioMonitoring();
     stopSpeaking();
   };
 
-  // MediaRecorder-based voice recording
+  // Enhanced MediaRecorder-based voice recording with reliable auto-stop
   const startRecording = async () => {
     try {
       stopSpeaking();
       
+      // Request microphone access with specific constraints
       const stream = await navigator.mediaDevices.getUserMedia({ 
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
-          autoGainControl: true
+          autoGainControl: true,
+          sampleRate: 44100,
+          channelCount: 1
         } 
       });
       
+      // Validate that we have a proper audio stream
+      const audioTracks = stream.getAudioTracks();
+      if (audioTracks.length === 0 || audioTracks[0].readyState !== 'live') {
+        throw new Error('No active audio track available');
+      }
+      
+      console.log('Audio track settings:', audioTracks[0].getSettings());
+      
+      // Create MediaRecorder with optimal settings
+      const mimeTypes = [
+        'audio/webm;codecs=opus',
+        'audio/webm',
+        'audio/mp4',
+        'audio/ogg;codecs=opus'
+      ];
+      
+      let selectedMimeType = '';
+      for (const mimeType of mimeTypes) {
+        if (MediaRecorder.isTypeSupported(mimeType)) {
+          selectedMimeType = mimeType;
+          break;
+        }
+      }
+      
+      if (!selectedMimeType) {
+        throw new Error('No supported audio format found');
+      }
+      
       const recorder = new MediaRecorder(stream, {
-        mimeType: 'audio/webm;codecs=opus'
+        mimeType: selectedMimeType,
+        bitsPerSecond: 128000
       });
       
       const chunks = [];
@@ -475,41 +606,110 @@ const DocumentAssistant = () => {
       recorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
           chunks.push(event.data);
+          console.log('Audio chunk received:', event.data.size, 'bytes');
         }
       };
       
       recorder.onstop = async () => {
-        const audioBlob = new Blob(chunks, { type: 'audio/webm' });
-        await transcribeAudio(audioBlob);
-        stream.getTracks().forEach(track => track.stop());
-        setAudioChunks([]);
+        console.log('MediaRecorder stopped');
+        
+        // Calculate total audio size
+        const totalSize = chunks.reduce((sum, chunk) => sum + chunk.size, 0);
+        console.log('Total recorded audio size:', totalSize, 'bytes');
+        
+        // Clean up monitoring first
+        cleanupAudioMonitoring();
+        
+        // Validate audio size - if too small, likely no meaningful speech
+        if (totalSize < MIN_AUDIO_SIZE) {
+          console.log('Audio too small, likely no speech detected');
+          setError('No speech detected. Please speak clearly into the microphone.');
+          setIsRecording(false);
+          setMediaRecorder(null);
+          return;
+        }
+        
+        // Create audio blob and process
+        const audioBlob = new Blob(chunks, { type: selectedMimeType });
+        console.log('Created audio blob:', audioBlob.size, 'bytes, type:', audioBlob.type);
+        
+        // Reset states
+        setIsRecording(false);
+        setMediaRecorder(null);
+        
+        // Process the audio
+        await transcribeAndSend(audioBlob);
       };
       
-      recorder.start();
+      recorder.onerror = (event) => {
+        console.error('MediaRecorder error:', event.error);
+        cleanupAudioMonitoring();
+        setError('Recording error occurred');
+        setIsRecording(false);
+        setMediaRecorder(null);
+      };
+      
+      // Store recorder reference
+      mediaRecorderRef.current = recorder;
+      
+      // Start recording
+      recorder.start(100); // Collect data every 100ms for better audio continuity
       setMediaRecorder(recorder);
       setAudioChunks(chunks);
       setIsRecording(true);
       setError(null);
       
+      // Start audio monitoring for auto-stop
+      startAudioMonitoring(stream);
+      
+      console.log('Recording started with format:', selectedMimeType);
+      
     } catch (error) {
       console.error('Error starting recording:', error);
-      setError('Could not access microphone. Please check permissions.');
-    }
-  };
-
-  const stopRecording = () => {
-    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-      mediaRecorder.stop();
+      cleanupAudioMonitoring();
+      
+      if (error.name === 'NotAllowedError') {
+        setError('Microphone access denied. Please allow microphone permissions.');
+      } else if (error.name === 'NotFoundError') {
+        setError('No microphone found. Please check your audio devices.');
+      } else {
+        setError(`Could not access microphone: ${error.message}`);
+      }
+      
       setIsRecording(false);
+      setMediaRecorder(null);
     }
   };
 
-  const transcribeAudio = async (audioBlob) => {
+  const stopRecording = (isAutoStop = false) => {
+    console.log(`${isAutoStop ? 'Auto-' : 'Manual '}stopping recording...`);
+    
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+      try {
+        mediaRecorderRef.current.stop();
+      } catch (error) {
+        console.error('Error stopping MediaRecorder:', error);
+        // Force cleanup if stop fails
+        cleanupAudioMonitoring();
+        setIsRecording(false);
+        setMediaRecorder(null);
+      }
+    } else {
+      // If MediaRecorder is not in recording state, force cleanup
+      cleanupAudioMonitoring();
+      setIsRecording(false);
+      setMediaRecorder(null);
+    }
+  };
+
+  const transcribeAndSend = async (audioBlob) => {
     setIsTranscribing(true);
     
     try {
+      console.log('Starting transcription for audio blob:', audioBlob.size, 'bytes');
+      
       const formData = new FormData();
-      formData.append('audio_file', audioBlob, 'recording.webm');
+      formData.append('audio_file', audioBlob, 'recording.' + (audioBlob.type.includes('webm') ? 'webm' : 'wav'));
       
       if (voiceLanguage && voiceLanguage !== 'auto') {
         formData.append('language', voiceLanguage);
@@ -519,61 +719,75 @@ const DocumentAssistant = () => {
         headers: {
           'Content-Type': 'multipart/form-data',
         },
+        timeout: 30000 // 30 second timeout
       });
       
-      const { text, confidence, language, auto_detected } = response.data;
+      const { text, confidence: voiceConfidence, language, auto_detected } = response.data;
+      console.log('Transcription result:', { text, confidence: voiceConfidence, language });
       
       if (text && text.trim()) {
+        // Filter out common noise/silence transcriptions
+        const noisePatterns = [
+          /thanks for watching/i,
+          /please subscribe/i,
+          /like and comment/i,
+          /don't forget to/i,
+          /see you next time/i,
+          /bye bye/i,
+          /thank you/i,
+          /^\s*\.\s*$/,
+          /^\s*\?\s*$/,
+          /^\s*!\s*$/
+        ];
+        
+        const isNoise = noisePatterns.some(pattern => pattern.test(text.trim()));
+        
+        if (isNoise) {
+          console.log('Detected noise/filler text, ignoring:', text);
+          setError('Only background noise detected. Please try speaking more clearly.');
+          return;
+        }
+        
         if (auto_detected && language) {
           setDetectedLanguage(language);
         }
         
-        setQuery(prev => prev + text);
-        if (confidence) {
-          setConfidence(confidence);
+        if (voiceConfidence) {
+          setConfidence(voiceConfidence);
         }
+        
+        // Clear any existing query to avoid duplication
+        setQuery('');
+        
+        // Auto-send the message directly
+        setTimeout(() => {
+          handleSearchWithText(text, voiceConfidence);
+        }, 100);
+        
+      } else {
+        setError('No speech detected in the recording. Please speak more clearly.');
       }
       
     } catch (error) {
       console.error('Transcription error:', error);
-      const errorMessage = error.response?.data?.detail || 'Failed to transcribe audio';
-      setError(`Transcription failed: ${errorMessage}`);
+      
+      if (error.code === 'ECONNABORTED') {
+        setError('Transcription timed out. Please try again with a shorter recording.');
+      } else {
+        const errorMessage = error.response?.data?.detail || 'Failed to transcribe audio';
+        setError(`Transcription failed: ${errorMessage}`);
+      }
     } finally {
       setIsTranscribing(false);
-    }
-  };
-
-  const startWebSpeechRecording = () => {
-    if (recognitionRef.current && webSpeechSupported) {
-      try {
-        stopSpeaking();
-        recognitionRef.current.start();
-      } catch (error) {
-        console.error('Error starting speech recognition:', error);
-        setError('Could not start voice recognition');
-      }
-    }
-  };
-
-  const stopWebSpeechRecording = () => {
-    if (recognitionRef.current) {
-      recognitionRef.current.stop();
+      setConfidence(0);
     }
   };
 
   const toggleRecording = () => {
     if (isRecording) {
-      if (useWebSpeech) {
-        stopWebSpeechRecording();
-      } else {
-        stopRecording();
-      }
+      stopRecording(false); // Manual stop
     } else {
-      if (useWebSpeech) {
-        startWebSpeechRecording();
-      } else {
-        startRecording();
-      }
+      startRecording();
     }
   };
 
@@ -759,16 +973,20 @@ const loadMessages = async (conversationId) => {
     }
   };
 
-  const handleSearch = async () => {
-    if (!query.trim()) return;
+  // Enhanced handleSearch that can accept text and confidence parameters
+  const handleSearchWithText = async (searchText = null, voiceConfidence = null) => {
+    const queryText = searchText || query;
+    if (!queryText.trim()) return;
 
-    const currentQuery = query;
-    setQuery('');
+    // Don't clear query if we're using searchText from voice input
+    if (!searchText) {
+      setQuery('');
+    }
     
     let targetConversation = currentConversation;
     
     if (!targetConversation) {
-      targetConversation = await createNewConversation(currentQuery);
+      targetConversation = await createNewConversation(queryText);
       if (!targetConversation) {
         setError('Failed to create conversation');
         return;
@@ -778,9 +996,9 @@ const loadMessages = async (conversationId) => {
     const userMessage = {
       id: Date.now(),
       type: 'user',
-      content: currentQuery,
+      content: queryText,
       timestamp: new Date(),
-      voiceMetadata: confidence > 0 ? { confidence } : null
+      voiceMetadata: (voiceConfidence || confidence) > 0 ? { confidence: voiceConfidence || confidence } : null
     };
     
     setMessages(prev => [...prev, userMessage]);
@@ -788,14 +1006,15 @@ const loadMessages = async (conversationId) => {
     setError(null);
     setShouldAutoScroll(true);
     
+    // Clear confidence after using
     setConfidence(0);
     
     try {
       const response = await axios.post(`${API_BASE_URL}/chat/${targetConversation.conversation_id}`, {
         conversation_id: targetConversation.conversation_id,
-        question: currentQuery,
-        is_voice_input: confidence > 0,
-        voice_confidence: confidence > 0 ? confidence : null
+        question: queryText,
+        is_voice_input: (voiceConfidence || confidence) > 0,
+        voice_confidence: (voiceConfidence || confidence) > 0 ? (voiceConfidence || confidence) : null
       });
       
       const apiResult = response.data;
@@ -849,6 +1068,11 @@ const loadMessages = async (conversationId) => {
     }
   };
 
+  // Original handleSearch function for backwards compatibility
+  const handleSearch = async () => {
+    await handleSearchWithText();
+  };
+
   const selectConversation = (conversation) => {
     setCurrentConversation(conversation);
     setError(null);
@@ -897,21 +1121,6 @@ const loadMessages = async (conversationId) => {
             <h4>Voice Input</h4>
             
             <div className="setting-group">
-              <label>Voice Input Method</label>
-              <select 
-                value={useWebSpeech ? 'webspeech' : 'whisper'} 
-                onChange={(e) => setUseWebSpeech(e.target.value === 'webspeech')}
-                className="setting-select"
-              >
-                <option value="whisper">Whisper API (Recommended)</option>
-                {webSpeechSupported}
-              </select>
-              <small className="setting-help">
-                Whisper provides better accuracy and auto-detects language.
-              </small>
-            </div>
-
-            <div className="setting-group">
               <label>Recognition Language</label>
               <select 
                 value={voiceLanguage} 
@@ -919,7 +1128,12 @@ const loadMessages = async (conversationId) => {
                 className="setting-select"
               >
                 <option value="auto">Auto-detect (Recommended)</option>
+                <option value="en">English</option>
+                <option value="tr">Türkçe</option>
               </select>
+              <small className="setting-help">
+                Uses Whisper API for high accuracy transcription with automatic speech detection and message sending.
+              </small>
             </div>
           </div>
 
@@ -982,7 +1196,12 @@ const loadMessages = async (conversationId) => {
                 disabled={!ttsSettings.enabled}
               >
                 <option value="auto">Auto-detect from text</option>
+                <option value="en">English</option>
+                <option value="tr">Türkçe</option>
               </select>
+              <small className="setting-help">
+                Choose language for speech synthesis or let it auto-detect
+              </small>
             </div>
           </div>
         </div>
@@ -1167,8 +1386,8 @@ const loadMessages = async (conversationId) => {
                 <div className="welcome-message">
                   <Database size={48} color="#9ca3af" />
                   <h3>Welcome to Ecore Support Assistant</h3>
-                  <p>Upload your documents from top right corner and start chatting with them. You can use your files accross multiple conversations.</p>
-                  {(voiceSupported || webSpeechSupported) && (
+                  <p>Upload your documents from top right corner and start chatting with them. You can use your files across multiple conversations.</p>
+                  {voiceSupported && (
                     <p className="voice-hint">
                       <Mic size={16} />
                       Voice input is available! Click the microphone to start.
@@ -1321,14 +1540,6 @@ const loadMessages = async (conversationId) => {
                 </div>
               )}
 
-              {/* Voice transcript preview */}
-              {transcript && (
-                <div className="transcript-preview">
-                  <span className="transcript-label">Listening:</span>
-                  <span className="transcript-text">{transcript}</span>
-                </div>
-              )}
-
               {/* Transcribing indicator */}
               {isTranscribing && (
                 <div className="transcript-preview">
@@ -1339,14 +1550,6 @@ const loadMessages = async (conversationId) => {
                   </span>
                 </div>
               )}
-
-              {/* Show detected language */}
-              {detectedLanguage && voiceLanguage === 'auto' && (
-                <div className="language-detection">
-                  <span className="language-label">Detected:</span>
-                  <span className="language-text">{getLanguageName(detectedLanguage)}</span>
-                </div>
-              )}
               
               <div className="chat-input-wrapper">
                 <textarea
@@ -1355,7 +1558,7 @@ const loadMessages = async (conversationId) => {
                   placeholder={
                     isRecording ? 
                       (isTranscribing ? "Transcribing audio..." : "Recording... Speak now") : 
-                      "Ask anything about your documents..."
+                      "Ask anything about your documents or click the mic to speak..."
                   }
                   className={`chat-input ${isRecording ? 'listening' : ''}`}
                   onKeyDown={handleKeyPress}
@@ -1383,11 +1586,11 @@ const loadMessages = async (conversationId) => {
                   )}
                   
                   {/* Voice input button */}
-                  {(voiceSupported || webSpeechSupported) && (
+                  {voiceSupported && (
                     <button
                       onClick={toggleRecording}
                       className={`voice-button ${isRecording ? 'listening' : ''}`}
-                      title={isRecording ? 'Stop recording' : 'Start voice input'}
+                      title={isRecording ? 'Stop recording' : 'Start voice input (auto-detects when you stop)'}
                       disabled={isSearching || isTranscribing}
                     >
                       {isRecording ? <MicOff size={20} /> : <Mic size={20} />}
