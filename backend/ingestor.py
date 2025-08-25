@@ -1,5 +1,5 @@
 
-from loaders import Loader
+from backend.loaders import Loader
 from langchain_core.documents import Document
 import os
 

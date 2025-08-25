@@ -1,7 +1,7 @@
 from pymongo.mongo_client import MongoClient
 from pymongo.operations import SearchIndexModel
-from loaders import Loader
-from embedder import Embedder
+from backend.loaders import Loader
+from backend.embedder import Embedder
 import os
 import dotenv
 

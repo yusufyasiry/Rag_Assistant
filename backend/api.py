@@ -1,23 +1,23 @@
 from pymongo.mongo_client import MongoClient
-from embedder import Embedder
+from backend.embedder import Embedder
 import os
 import dotenv
 import openai 
 from pydantic import BaseModel
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from prompts import Prompts
+from backend.prompts import Prompts
 from datetime import datetime, timezone, timedelta
 import uuid
 from motor.motor_asyncio import AsyncIOMotorClient
 from typing import Dict, Optional, Union, cast, List
 import tempfile
 from pathlib import Path
-from calculate_cost import CostProjection
+from backend.calculate_cost import CostProjection
 import langid
 from openai.types.chat import ChatCompletionMessageParam
 import shutil
-from ingestor import Ingestor
+from backend.ingestor import Ingestor
 import asyncio
 from fastapi.responses import StreamingResponse
 import io

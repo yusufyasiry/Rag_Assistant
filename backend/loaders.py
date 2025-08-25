@@ -55,26 +55,3 @@ class Loader:
 
         chunks = splitter.split_documents([doc])
         return chunks
-
-"""
-class OracleSQLLoader:
-    def __init__(self, user, password, dsn, query, content_column, metadata_columns=[]):
-        self.conn = oracledb.connect(user=user, password=password, dsn=dsn)
-        self.query = query
-        self.content_column = content_column
-        self.metadata_columns = metadata_columns
-
-    def load(self):
-        cursor = self.conn.cursor()
-        cursor.execute(self.query)
-        columns = [desc[0] for desc in cursor.description]
-        results = []
-
-        for row in cursor.fetchall():
-            row_dict = {col: (val.read() if hasattr(val, "read") else val) for col, val in zip(columns, row)}
-            content = row_dict.get(self.content_column, "")
-            metadata = {k: row_dict[k] for k in self.metadata_columns if k in row_dict}
-            results.append(Document(page_content=str(content), metadata=metadata))
-
-        return results
-"""
