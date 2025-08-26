@@ -566,8 +566,6 @@ async def chat_with_conversation(conversation_id: str, request: MessageCreate):
     - Do not invent, guess, or speculate.
 
     SPECIAL CASES
-    - If the ONLY document in Document Context is exactly "This is a root doc for search index":
-    → Respond ONLY with "Please upload your files from upload panel" in the user's language. Do not add anything else.
     - If the user's request is outside finance/leasing:
     → Politely decline and offer to help with a finance/leasing topic.
 
