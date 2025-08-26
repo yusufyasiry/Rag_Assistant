@@ -988,7 +988,9 @@ async def test_language_detection(request: dict):
     
 @app.post("/upload-document")
 async def upload_document(file: UploadFile = File(...)):
-    """Upload and process document with proper error handling for cloud deployment"""
+    """
+    Upload and process document with enhanced error handling for cloud deployment
+    """
     
     if not file.filename:
         raise HTTPException(status_code=400, detail="No filename provided")
@@ -999,12 +1001,20 @@ async def upload_document(file: UploadFile = File(...)):
     if file_ext not in allowed_extensions:
         raise HTTPException(status_code=400, detail=f"Unsupported file type. Allowed: {allowed_extensions}")
     
-    # Get file size
-    content = await file.read()
-    file_size = len(content)
+    # Read file content and get size
+    try:
+        content = await file.read()
+        file_size = len(content)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to read file: {str(e)}")
     
     if file_size == 0:
         raise HTTPException(status_code=400, detail="Empty file")
+    
+    # File size limit (10MB)
+    MAX_FILE_SIZE = 10 * 1024 * 1024
+    if file_size > MAX_FILE_SIZE:
+        raise HTTPException(status_code=413, detail="File too large. Maximum size is 10MB")
     
     # Create document record
     document_id = str(uuid.uuid4())
@@ -1017,41 +1027,81 @@ async def upload_document(file: UploadFile = File(...)):
         "user_id": USER_ID
     }
     
-    await db.documents.insert_one(document_record)
-    
-    # Use temporary file
-    with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as temp_file:
-        temp_file.write(content)
-        temp_file_path = temp_file.name
-    
     try:
+        await db.documents.insert_one(document_record)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+    
+    # Use temporary file with proper cleanup
+    temp_file_path = None
+    try:
+        # Create temporary file
+        with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as temp_file:
+            temp_file.write(content)
+            temp_file_path = temp_file.name
+        
+        print(f"Processing file: {file.filename} ({file_size} bytes)")
+        
         # Process the file
-        ingestor = Ingestor("/tmp")  # Use system temp directory
-        documents_chunks = ingestor.ingest_single_file(temp_file_path)
+        ingestor = Ingestor("/tmp")
+        try:
+            documents_chunks = ingestor.ingest_single_file(temp_file_path)
+        except Exception as processing_error:
+            error_msg = str(processing_error).lower()
+            
+            # Provide user-friendly error messages
+            if "pi_heif" in error_msg or "pillow_heif" in error_msg:
+                user_error = "This PDF contains image formats that require additional processing libraries. Please try a text-based PDF or convert the file."
+            elif "no module named" in error_msg:
+                user_error = f"Missing processing library for this file type. Please try a different file format."
+            elif "no text content" in error_msg:
+                user_error = "No readable text content found in the file. Please ensure the file contains text."
+            elif "unstructured" in error_msg:
+                user_error = "File processing failed. Please try a simpler PDF or different file format."
+            else:
+                user_error = f"Document processing error: {str(processing_error)}"
+            
+            raise Exception(user_error)
         
         if not documents_chunks:
-            raise Exception("No content could be extracted from the file")
+            raise Exception("No readable content found in the file")
+        
+        print(f"Extracted {len(documents_chunks)} chunks from {file.filename}")
         
         # Create embeddings
-        embedder = Embedder()
-        texts = [doc.page_content for doc in documents_chunks]
-        
-        if not texts:
-            raise Exception("No text content found in document")
-        
-        embeddings = embedder.embed(texts)
+        try:
+            embedder = Embedder()
+            texts = [doc.page_content for doc in documents_chunks]
+            
+            if not texts or not any(text.strip() for text in texts):
+                raise Exception("No text content found in extracted chunks")
+            
+            embeddings = embedder.embed(texts)
+            
+        except Exception as e:
+            raise Exception(f"Failed to create embeddings: {str(e)}")
         
         # Save chunks to database
         chunks_inserted = 0
-        for doc_chunk, embedding in zip(documents_chunks, embeddings):
-            chunk_record = {
-                "document_id": document_id,
-                "content": doc_chunk.page_content,
-                "embedding": embedding,
-                "metadata": doc_chunk.metadata
-            }
-            await db.embeddings.insert_one(chunk_record)
-            chunks_inserted += 1
+        try:
+            for doc_chunk, embedding in zip(documents_chunks, embeddings):
+                if not doc_chunk.page_content.strip():
+                    continue  # Skip empty chunks
+                    
+                chunk_record = {
+                    "document_id": document_id,
+                    "content": doc_chunk.page_content,
+                    "embedding": embedding,
+                    "metadata": doc_chunk.metadata
+                }
+                await db.embeddings.insert_one(chunk_record)
+                chunks_inserted += 1
+                
+        except Exception as e:
+            raise Exception(f"Failed to save chunks to database: {str(e)}")
+        
+        if chunks_inserted == 0:
+            raise Exception("No valid content chunks were created")
         
         # Update document status
         await db.documents.update_one(
@@ -1065,6 +1115,8 @@ async def upload_document(file: UploadFile = File(...)):
             }
         )
         
+        print(f"Successfully processed {file.filename}: {chunks_inserted} chunks created")
+        
         # Start background verification
         asyncio.create_task(background_index_verification(document_id))
         
@@ -1076,19 +1128,31 @@ async def upload_document(file: UploadFile = File(...)):
             "status": "processing_index"
         }
         
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
+        
     except Exception as e:
+        print(f"Upload error for {file.filename}: {str(e)}")
+        
         # Update document status to error
-        await db.documents.update_one(
-            {"document_id": document_id},
-            {"$set": {"status": "error", "error_message": str(e)}}
-        )
+        try:
+            await db.documents.update_one(
+                {"document_id": document_id},
+                {"$set": {"status": "error", "error_message": str(e)}}
+            )
+        except:
+            pass  # Don't let database update errors mask the original error
         
         raise HTTPException(status_code=500, detail=f"Document processing failed: {str(e)}")
         
     finally:
         # Always clean up temp file
-        if os.path.exists(temp_file_path):
-            os.unlink(temp_file_path)
+        if temp_file_path and os.path.exists(temp_file_path):
+            try:
+                os.unlink(temp_file_path)
+            except Exception as cleanup_error:
+                print(f"Warning: Failed to clean up temp file: {cleanup_error}")
 
 @app.get("/documents")
 async def get_documents(user_id: str = USER_ID, skip: int = 0, limit: int = 50):
