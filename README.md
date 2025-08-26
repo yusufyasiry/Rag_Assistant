@@ -212,21 +212,7 @@ Env‑driven config to review:
 
 ---
 
-## 🗺️ Roadmap Ideas
 
-- Switch to a `backend/` package with routers, services, and schemas modules (see canvas).
-- Add Atlas Vector Index creation script.
-- Streaming responses for chat (Server‑Sent Events or WebSocket).
-
----
-
-## 📄 License
-
-Choose a license (MIT/Apache‑2.0/BSD‑3‑Clause) and add a `LICENSE` file.
-
----
-
-## 🙌 Acknowledgements
 
 - LangChain community loaders (`unstructured`).
 - OpenAI chat/embeddings/TTS.
