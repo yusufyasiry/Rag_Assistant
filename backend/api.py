@@ -6,12 +6,11 @@ from pydantic import BaseModel
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from backend.prompts import Prompts
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 import uuid
 from motor.motor_asyncio import AsyncIOMotorClient
 from typing import Dict, Optional, Union, cast, List
 import tempfile
-from pathlib import Path
 from backend.calculate_cost import CostProjection
 import langid
 from openai.types.chat import ChatCompletionMessageParam
@@ -441,7 +440,7 @@ app.add_middleware(
         "http://localhost:3000",
         "http://localhost:3001",  
         "http://127.0.0.1:3000",
-        "https://ecore-frontend.onrender.com",  # Add your frontend Render URL
+        "https://rag-assistant-ui.onrender.com",  # Add your frontend Render URL
         "https://*.onrender.com",  # Allow all Render subdomains
     ],
     allow_credentials=True,
