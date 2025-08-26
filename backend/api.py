@@ -1,4 +1,3 @@
-from pymongo.mongo_client import MongoClient
 from backend.embedder import Embedder
 import os
 import dotenv
@@ -16,11 +15,9 @@ from pathlib import Path
 from backend.calculate_cost import CostProjection
 import langid
 from openai.types.chat import ChatCompletionMessageParam
-import shutil
 from backend.ingestor import Ingestor
 import asyncio
 from fastapi.responses import StreamingResponse
-import io
 
 
 

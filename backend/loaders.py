@@ -4,7 +4,7 @@ from langchain_community.document_loaders.csv_loader import UnstructuredCSVLoade
 from langchain_community.document_loaders import UnstructuredHTMLLoader
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-import oracledb
+
 
 
 
