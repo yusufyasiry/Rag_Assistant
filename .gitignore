@@ -38,7 +38,6 @@ frontend/build/
 frontend/node_modules/
 
 # Data and uploads
-data/
 uploads/
 *.txt
 *.pdf
