@@ -988,26 +988,30 @@ async def test_language_detection(request: dict):
     
 @app.post("/upload-document")
 async def upload_document(file: UploadFile = File(...)):
-    """
-    Upload and process the data
-    """
+    """Upload and process document with proper error handling for cloud deployment"""
     
-    # Validata data
     if not file.filename:
         raise HTTPException(status_code=400, detail="No filename provided")
     
     # Check extension
-    allowed_extensions =  ['.pdf', '.txt', '.csv', '.html', '.htm', '.docx']
+    allowed_extensions = ['.pdf', '.txt', '.csv', '.html', '.htm', '.docx']
     file_ext = os.path.splitext(file.filename)[1].lower()
     if file_ext not in allowed_extensions:
         raise HTTPException(status_code=400, detail=f"Unsupported file type. Allowed: {allowed_extensions}")
+    
+    # Get file size
+    content = await file.read()
+    file_size = len(content)
+    
+    if file_size == 0:
+        raise HTTPException(status_code=400, detail="Empty file")
     
     # Create document record
     document_id = str(uuid.uuid4())
     document_record = {
         "document_id": document_id,
         "filename": file.filename,
-        "file_size": file.size,
+        "file_size": file_size,
         "status": "processing",
         "uploaded_at": datetime.now(timezone.utc),
         "user_id": USER_ID
@@ -1015,38 +1019,41 @@ async def upload_document(file: UploadFile = File(...)):
     
     await db.documents.insert_one(document_record)
     
-    # save file temporarily
-    data_folder = "./data"
-    os.makedirs(data_folder, exist_ok=True)
-    temp_file_path = os.path.join(data_folder, f"{document_id}_{file.filename}")
+    # Use temporary file
+    with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as temp_file:
+        temp_file.write(content)
+        temp_file_path = temp_file.name
     
     try:
-        # save uploaded file
-        with open(temp_file_path, "wb") as buffer:
-            content = await file.read()
-            buffer.write(content)
-        
-        # process the file
-        ingestor = Ingestor(data_folder)
+        # Process the file
+        ingestor = Ingestor("/tmp")  # Use system temp directory
         documents_chunks = ingestor.ingest_single_file(temp_file_path)
         
-        # create embeddings
+        if not documents_chunks:
+            raise Exception("No content could be extracted from the file")
+        
+        # Create embeddings
         embedder = Embedder()
         texts = [doc.page_content for doc in documents_chunks]
+        
+        if not texts:
+            raise Exception("No text content found in document")
+        
         embeddings = embedder.embed(texts)
         
-        # save chunks to embeddings collection
+        # Save chunks to database
         chunks_inserted = 0
         for doc_chunk, embedding in zip(documents_chunks, embeddings):
             chunk_record = {
-                "document_id": document_id,  # Link to source document
+                "document_id": document_id,
                 "content": doc_chunk.page_content,
                 "embedding": embedding,
                 "metadata": doc_chunk.metadata
             }
             await db.embeddings.insert_one(chunk_record)
             chunks_inserted += 1
-            
+        
+        # Update document status
         await db.documents.update_one(
             {"document_id": document_id},
             {
@@ -1058,11 +1065,10 @@ async def upload_document(file: UploadFile = File(...)):
             }
         )
         
-        # cleanup tempfile
-        os.unlink(temp_file_path)
+        # Start background verification
+        asyncio.create_task(background_index_verification(document_id))
         
-        # response
-        response_data = {
+        return {
             "success": True,
             "document_id": document_id,
             "filename": file.filename,
@@ -1070,21 +1076,19 @@ async def upload_document(file: UploadFile = File(...)):
             "status": "processing_index"
         }
         
-        # background verification
-        asyncio.create_task(background_index_verification(document_id))
-        
-        return response_data
-        
     except Exception as e:
-        # Cleanup on error
-        if os.path.exists(temp_file_path):
-            os.unlink(temp_file_path)
-        
-        # update document status to error
+        # Update document status to error
         await db.documents.update_one(
             {"document_id": document_id},
             {"$set": {"status": "error", "error_message": str(e)}}
         )
+        
+        raise HTTPException(status_code=500, detail=f"Document processing failed: {str(e)}")
+        
+    finally:
+        # Always clean up temp file
+        if os.path.exists(temp_file_path):
+            os.unlink(temp_file_path)
 
 @app.get("/documents")
 async def get_documents(user_id: str = USER_ID, skip: int = 0, limit: int = 50):
