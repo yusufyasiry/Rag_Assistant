@@ -71,7 +71,10 @@ const DocumentAssistant = () => {
   const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
   
   // API base URL
-  const API_BASE_URL = process.env.REACT_APP_API_URL;
+  const API_BASE_URL = process.env.REACT_APP_API_URL || 
+    (process.env.NODE_ENV === 'production' 
+      ? 'https://ecore-backend.onrender.com' 
+      : 'http://127.0.0.1:8000');
   const USER_ID = 'user123';
 
   // Initialize voice capabilities

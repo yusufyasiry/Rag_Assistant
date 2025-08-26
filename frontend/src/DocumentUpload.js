@@ -23,6 +23,12 @@ const DocumentUploadPanel = () => {
   const [isLoadingDocs, setIsLoadingDocs] = useState(false);
   const fileInputRef = useRef(null);
 
+  // API base URL - handle both development and production
+  const API_BASE_URL = process.env.REACT_APP_API_URL || 
+    (process.env.NODE_ENV === 'production' 
+      ? 'https://ecore-backend.onrender.com' 
+      : 'http://127.0.0.1:8000');
+
   // Fixed status polling with better management
   const statusPollingRef = useRef(new Map());
   const pollingCountRef = useRef(new Map());
@@ -31,7 +37,7 @@ const DocumentUploadPanel = () => {
   const loadDocumentsFromBackend = async () => {
     setIsLoadingDocs(true);
     try {
-      const response = await fetch('http://127.0.0.1:8000/documents');
+      const response = await fetch(`${API_BASE_URL}/documents`);
       const result = await response.json();
       
       if (response.ok) {
@@ -97,7 +103,7 @@ const DocumentUploadPanel = () => {
         
         console.log(`Polling document ${documentId} - attempt ${currentPollCount + 1}`);
         
-        const response = await fetch(`http://127.0.0.1:8000/documents/${documentId}/status`);
+        const response = await fetch(`${API_BASE_URL}/documents/${documentId}/status`);
         
         if (!response.ok) {
           throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -263,7 +269,7 @@ const DocumentUploadPanel = () => {
       const formData = new FormData();
       formData.append('file', file);
       
-      const response = await fetch('http://127.0.0.1:8000/upload-document', {
+      const response = await fetch(`${API_BASE_URL}/upload-document`, {
         method: 'POST',
         body: formData,
       });
@@ -344,7 +350,7 @@ const DocumentUploadPanel = () => {
         // Stop polling for this document
         stopPollingForDocument(documentId);
 
-        const response = await fetch(`http://127.0.0.1:8000/documents/${documentId}`, {
+        const response = await fetch(`${API_BASE_URL}/documents/${documentId}`, {
           method: 'DELETE'
         });
         
@@ -372,7 +378,7 @@ const DocumentUploadPanel = () => {
         stopPollingForDocument(documentId);
         
         // Delete the existing document
-        await fetch(`http://127.0.0.1:8000/documents/${documentId}`, {
+        await fetch(`${API_BASE_URL}/documents/${documentId}`, {
           method: 'DELETE'
         });
       }
@@ -558,7 +564,7 @@ const DocumentUploadPanel = () => {
           >
             <Upload size={24} color={isDragging ? '#3b82f6' : '#9ca3af'} />
             <p className="upload-area-title-sidebar">
-              {isDragging ? 'Drop here' : 'Upload your files to database. This process may take some time.'}
+              {isDragging ? 'Drop here' : 'Upload your files to database'}
             </p>
             <button
               onClick={() => fileInputRef.current?.click()}
@@ -673,7 +679,7 @@ const DocumentUploadPanel = () => {
               <FileText size={24} color="#9ca3af" />
               <p>No documents</p>
               <p className="no-documents-hint-sidebar">
-                Upload your files in the field above. This process may take some time.
+                Upload your files in the field above
               </p>
             </div>
           )}

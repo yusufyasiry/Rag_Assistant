@@ -1,71 +1,70 @@
-# === Python ===
+# Environment files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Python
 __pycache__/
 *.py[cod]
-*.pyo
-*.pyd
+*$py.class
 *.so
-
-# Byte-compiled / optimized / DLL files
-*.egg
-*.egg-info/
-dist/
+.Python
 build/
+develop-eggs/
+dist/
+downloads/
 eggs/
+.eggs/
+lib/
+lib64/
 parts/
-*.manifest
-*.spec
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
 
-# === Virtual Environment ===
-.venv/
-env/
-venv/
-ENV/
-*.env
-*.venv
+# Node.js/React
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+frontend/build/
+frontend/node_modules/
 
-# === Pipenv / Poetry ===
-Pipfile.lock
-poetry.lock
+# Data and uploads
+data/
+uploads/
+*.txt
+*.pdf
+*.csv
+*.docx
 
-# === Jupyter Notebooks Checkpoints ===
-.ipynb_checkpoints/
-
-# === VSCode ===
+# IDEs
 .vscode/
+.idea/
+*.swp
+*.swo
+*~
 
-# === macOS ===
+# OS
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
 
-# === Test / Coverage ===
-htmlcov/
-.tox/
-.nox/
-coverage.xml
-*.cover
-*.py,cover
-.cache
-.pytest_cache/
-
-# === Logs ===
+# Logs
+logs
 *.log
 
-# === dotenv / config ===
-.env
-.env.*
-
-# === MongoDB dump or data files (if any) ===
-*.bson
-*.json
-
-# === Custom data or output ===
-output/
-*.db
-*.sqlite3
-
-# === LangChain ===
-langchain*.cache/
-
-
-todo.txt
-.env
-data/
+# Temporary files
+tmp/
+temp/
