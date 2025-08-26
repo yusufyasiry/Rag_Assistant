@@ -211,9 +211,3 @@ Env‑driven config to review:
 - **requirements.txt encoding:** if pip errors on Windows, open the file and re‑save as **UTF‑8** (some editors may add UTF‑16 BOM).
 
 ---
-
-
-
-- LangChain community loaders (`unstructured`).
-- OpenAI chat/embeddings/TTS.
-- MongoDB Atlas Vector Search.
