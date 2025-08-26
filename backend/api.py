@@ -436,22 +436,18 @@ documents = db["documents"]
 
 
 app = FastAPI()
+CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:3000")
+allow_origins = [o.strip() for o in CORS_ORIGINS.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:3001",  
-        "http://127.0.0.1:3000"   
-    ],
+    allow_origins=allow_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-     expose_headers=[  
-        "X-Total-Chunks",
-        "X-Current-Chunk",
-        "X-Detected-Language",
-        "X-Chunk-Index",
-        "Content-Disposition",
+    expose_headers=[
+        "X-Total-Chunks", "X-Current-Chunk", "X-Detected-Language",
+        "X-Chunk-Index", "Content-Disposition",
     ],
 )
 
