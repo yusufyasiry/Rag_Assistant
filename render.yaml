@@ -3,9 +3,16 @@ services:
   - type: web
     name: ecore-backend
     env: python
-    buildCommand: pip install -r requirements.txt
+    plan: free
+    region: oregon
+    buildCommand: |
+      python --version
+      pip install --upgrade pip
+      pip install -r requirements.txt
     startCommand: uvicorn backend.api:app --host 0.0.0.0 --port $PORT
     envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.10
       - key: OPENAI_API_KEY
         sync: false
       - key: MONGO_URI
@@ -17,7 +24,12 @@ services:
   - type: web
     name: ecore-frontend
     env: static
-    buildCommand: cd frontend && npm install && npm run build
+    plan: free
+    buildCommand: |
+      echo "Building frontend..."
+      cd frontend
+      npm install
+      npm run build
     staticPublishPath: frontend/build
     routes:
       - type: rewrite
