@@ -26,7 +26,7 @@ const DocumentUploadPanel = () => {
   // API base URL - handle both development and production
   const API_BASE_URL = process.env.REACT_APP_API_URL || 
     (process.env.NODE_ENV === 'production' 
-      ? 'https://ecore-backend.onrender.com' 
+      ? 'https://rag-assistant-gilv.onrender.com' 
       : 'http://127.0.0.1:8000');
 
   // Fixed status polling with better management

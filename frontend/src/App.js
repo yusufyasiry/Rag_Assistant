@@ -73,7 +73,7 @@ const DocumentAssistant = () => {
   // API base URL
   const API_BASE_URL = process.env.REACT_APP_API_URL || 
     (process.env.NODE_ENV === 'production' 
-      ? 'https://ecore-backend.onrender.com' 
+      ? 'https://rag-assistant-gilv.onrender.com' 
       : 'http://127.0.0.1:8000');
   const USER_ID = 'user123';
 
